@@ -9,22 +9,45 @@ import 'application/app_controller.dart';
 import 'core/util/format.dart';
 import 'presentation/dashboard.dart';
 
+/// Windows 는 우측 상단 항상-위 미니 패널(HUD)로 동작 — 트레이 아이콘이 오버플로에 숨는
+/// 문제를 우회하고 사용량을 화면에 상시 표시. macOS 는 메뉴바 전용(창 숨김).
+/// `TOKENBAR_FORCE_HUD=1` 로 macOS 에서도 패널을 미리볼 수 있다(개발/검증용).
+bool get hudMode =>
+    Platform.isWindows || Platform.environment['TOKENBAR_FORCE_HUD'] == '1';
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
-  // 메뉴바 전용 앱: 창은 숨긴 채로 시작(LSUIElement=1 → Dock 아이콘 없음).
   await windowManager.ensureInitialized();
-  const windowOptions = WindowOptions(
-    size: Size(460, 620),
-    center: true,
-    skipTaskbar: true,
-    titleBarStyle: TitleBarStyle.normal,
-    title: 'Claudle',
-  );
-  await windowManager.waitUntilReadyToShow(windowOptions, () async {
-    await windowManager.setPreventClose(true); // 닫기 → 종료 대신 숨김
-    await windowManager.hide();
-  });
+
+  if (hudMode) {
+    // 항상-위 프레임리스 미니 패널을 우측 상단에 띄운 채 시작.
+    const windowOptions = WindowOptions(
+      size: Size(340, 360),
+      skipTaskbar: true,
+      titleBarStyle: TitleBarStyle.hidden,
+      alwaysOnTop: true,
+      title: 'Claudle',
+    );
+    await windowManager.waitUntilReadyToShow(windowOptions, () async {
+      await windowManager.setAlignment(Alignment.topRight);
+      await windowManager.setAlwaysOnTop(true);
+      await windowManager.setPreventClose(true); // 닫기 → 종료 대신 숨김
+      await windowManager.show();
+    });
+  } else {
+    // 메뉴바 전용 앱: 창은 숨긴 채로 시작(LSUIElement=1 → Dock 아이콘 없음).
+    const windowOptions = WindowOptions(
+      size: Size(460, 620),
+      center: true,
+      skipTaskbar: true,
+      titleBarStyle: TitleBarStyle.normal,
+      title: 'Claudle',
+    );
+    await windowManager.waitUntilReadyToShow(windowOptions, () async {
+      await windowManager.setPreventClose(true); // 닫기 → 종료 대신 숨김
+      await windowManager.hide();
+    });
+  }
 
   runApp(const ClaudleApp());
 }
@@ -149,7 +172,9 @@ class _ClaudleAppState extends State<ClaudleApp>
       await trayManager.setContextMenu(
         Menu(
           items: [
-            MenuItem(key: 'show_window', label: '대시보드 열기'),
+            MenuItem(
+                key: 'show_window',
+                label: hudMode ? '패널 보이기' : '대시보드 열기'),
             MenuItem.separator(),
             MenuItem(key: 'exit_app', label: '종료'),
           ],
@@ -243,7 +268,9 @@ class _ClaudleAppState extends State<ClaudleApp>
       debugShowCheckedModeBanner: false,
       title: 'Claudle',
       theme: tokenBarTheme(),
-      home: DashboardScreen(controller: _controller),
+      home: hudMode
+          ? WindowsHudScreen(controller: _controller)
+          : DashboardScreen(controller: _controller),
     );
   }
 }

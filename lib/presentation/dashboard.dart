@@ -1,5 +1,6 @@
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
+import 'package:window_manager/window_manager.dart';
 
 import '../application/app_controller.dart';
 import '../core/db/usage_database.dart';
@@ -41,6 +42,58 @@ class DashboardScreen extends StatelessWidget {
           const SizedBox(height: 20),
           // 보조: 기간별 토큰/비용 집계.
           _UsageBreakdown(controller: controller),
+        ],
+      ),
+    );
+  }
+}
+
+/// Windows 전용 항상-위 미니 패널: 우측 상단에 늘 떠서 세션%·리셋·주간 한도를 보여준다.
+/// (Windows 트레이 아이콘은 오버플로에 숨을 수 있어 화면에 상시 표시가 더 확실하다.
+///  macOS 는 메뉴바를 쓰므로 이 화면을 사용하지 않는다.) 헤드라인 [_LimitsPanel] 재사용.
+class WindowsHudScreen extends StatelessWidget {
+  final AppController controller;
+  const WindowsHudScreen({super.key, required this.controller});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // 드래그로 창을 이동할 수 있는 미니 헤더 + 트레이로 숨김 버튼.
+          DragToMoveArea(
+            child: Container(
+              height: 34,
+              padding: const EdgeInsets.only(left: 12, right: 2),
+              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+              child: Row(
+                children: [
+                  const Text('Claudle 🐩',
+                      style:
+                          TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                  const Spacer(),
+                  IconButton(
+                    icon: const Icon(Icons.remove, size: 16),
+                    tooltip: '트레이로 숨기기',
+                    padding: EdgeInsets.zero,
+                    constraints:
+                        const BoxConstraints.tightFor(width: 30, height: 30),
+                    onPressed: () => windowManager.hide(),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          Expanded(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
+              child: ValueListenableBuilder<SubscriptionLimits?>(
+                valueListenable: controller.limits,
+                builder: (_, lim, _) => _LimitsPanel(limits: lim),
+              ),
+            ),
+          ),
         ],
       ),
     );
