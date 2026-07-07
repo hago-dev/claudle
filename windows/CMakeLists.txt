@@ -72,6 +72,16 @@ endif()
 set(INSTALL_BUNDLE_DATA_DIR "${CMAKE_INSTALL_PREFIX}/data")
 set(INSTALL_BUNDLE_LIB_DIR "${CMAKE_INSTALL_PREFIX}")
 
+# MSVC 런타임 DLL(msvcp140 / vcruntime140 / vcruntime140_1)을 exe 옆에 함께 설치 —
+# VC++ 재배포판이 없는 클린 Windows 머신에서도 실행되도록. (UCRT 는 Win10+ 내장이라 제외.)
+set(CMAKE_INSTALL_UCRT_LIBRARIES OFF)
+set(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS_SKIP TRUE) # 자동 install 억제 → 아래서 번들 위치로 명시 설치
+include(InstallRequiredSystemLibraries)
+if(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS)
+  install(FILES ${CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS}
+    DESTINATION "${INSTALL_BUNDLE_LIB_DIR}" COMPONENT Runtime)
+endif()
+
 install(TARGETS ${BINARY_NAME} RUNTIME DESTINATION "${CMAKE_INSTALL_PREFIX}"
   COMPONENT Runtime)
 

@@ -7,7 +7,8 @@
 
 - **Flutter 3.41.2** (이 저장소의 `.fvmrc` 기준. `flutter --version` 으로 확인)
 - **Visual Studio 2022** + "C++ 데스크톱 개발" 워크로드 (Flutter Windows 빌드 필수)
-- **Inno Setup 6** — https://jrsoftware.org/isdl.php (설치파일 컴파일용)
+- **Inno Setup 6.3 이상** — https://jrsoftware.org/isdl.php (설치파일 컴파일용;
+  `.iss` 의 `ArchitecturesAllowed=x64compatible` 가 6.3+ 를 요구. CI 는 최신판 자동 설치)
 
 ```powershell
 flutter config --enable-windows-desktop

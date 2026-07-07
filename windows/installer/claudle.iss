@@ -14,7 +14,7 @@
 
 [Setup]
 ; AppId 는 업그레이드 식별용 고정 GUID — 변경 금지(바꾸면 재설치가 별개 앱으로 취급됨).
-AppId={{B8F3A1C4-2D6E-4A7B-9C0F-3E5D7A9B1C2E}}
+AppId={{B8F3A1C4-2D6E-4A7B-9C0F-3E5D7A9B1C2E}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppPublisher={#AppPublisher}
