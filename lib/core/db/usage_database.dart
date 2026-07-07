@@ -301,9 +301,11 @@ class UsageDatabase {
   }
 
   /// 경로에서 마지막 디렉토리명. 예: '/Users/me/Desktop/project/sso-api' → 'sso-api'.
+  /// 구분자는 `/`(POSIX)·`\`(Windows) 모두 허용.
   static String? _dirName(String? cwd) {
     if (cwd == null || cwd.isEmpty) return null;
-    final parts = cwd.split('/').where((s) => s.isNotEmpty).toList();
+    final parts =
+        cwd.split(RegExp(r'[/\\]')).where((s) => s.isNotEmpty).toList();
     return parts.isEmpty ? null : parts.last;
   }
 

@@ -1,0 +1,51 @@
+name: build-windows
+
+# 클라우드의 Windows 러너에서 Claudle 설치파일(.exe)을 빌드한다.
+# → macOS 에서 Windows 바이너리를 만들 수 없으므로 CI 로 대신 빌드.
+# 결과물은 Actions 실행 페이지의 Artifacts 에서 다운로드해 그대로 배포하면 된다.
+
+on:
+  workflow_dispatch: {}          # Actions 탭에서 "Run workflow" 버튼으로 수동 실행
+  push:
+    tags: ['v*']                 # v1.0.0 같은 태그 푸시 시 자동 빌드
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Flutter 3.41.2
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.41.2
+          channel: stable
+          cache: true
+
+      - run: flutter config --enable-windows-desktop
+      - run: flutter pub get
+
+      # 트레이 .ico 는 이미 커밋돼 있어 재생성 불필요(assets/tray/**.ico).
+      - name: Build Windows (release)
+        run: flutter build windows --release
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Compile installer (.exe)
+        run: '& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" windows\installer\claudle.iss'
+
+      # ① 설치파일 — 넘겨줄 파일. Actions 실행 페이지 Artifacts 에서 다운로드.
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: Claudle-Setup
+          path: windows/installer/dist/*.exe
+          if-no-files-found: error
+
+      # ② (선택) 포터블 폴더 — 설치 없이 압축해제 후 tokenbar.exe 실행.
+      - name: Upload portable build
+        uses: actions/upload-artifact@v4
+        with:
+          name: Claudle-portable
+          path: build/windows/x64/runner/Release/

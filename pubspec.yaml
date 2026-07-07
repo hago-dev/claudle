@@ -54,6 +54,10 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
 
+  # 빌드타임 툴 전용(런타임 미포함): PNG 트레이 매트릭스 → Windows .ico 변환
+  # (tool/gen_win_ico.dart). Windows 트레이는 LoadImage(IMAGE_ICON) 라 .ico 만 로드.
+  image: ^4.3.0
+
   # The "flutter_lints" package below contains a set of recommended lints to
   # encourage good coding practices. The lint set provided by the package is
   # activated in the `analysis_options.yaml` file located at the root of your

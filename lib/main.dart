@@ -102,8 +102,10 @@ class _ClaudleAppState extends State<ClaudleApp>
 
   /// 현재 (프레임 × 채움) 매트릭스 에셋으로 트레이 아이콘 갱신.
   /// 경로가 직전과 같으면 건너뜀 — 유휴 정지 상태에서 IPC 를 0 으로.
+  /// Windows 트레이는 `LoadImage(IMAGE_ICON)` 이라 `.ico` 만 로드된다(PNG 실패) → 확장자 분기.
   Future<void> _setDogIcon() async {
-    final path = 'assets/tray/run/run_${_dogFrame}_${_fillBucket()}.png';
+    final ext = Platform.isWindows ? 'ico' : 'png';
+    final path = 'assets/tray/run/run_${_dogFrame}_${_fillBucket()}.$ext';
     if (path == _lastIconPath) return;
     _lastIconPath = path;
     await trayManager.setIcon(path, isTemplate: false);
@@ -126,12 +128,23 @@ class _ClaudleAppState extends State<ClaudleApp>
     });
   }
 
+  /// 헤드라인(세션 %·리셋 카운트다운)을 트레이에 표시.
+  /// macOS: NSStatusItem 아이콘 옆 텍스트 타이틀. Windows: 시스템 트레이는 텍스트
+  /// 타이틀을 지원하지 않으므로(setTitle 미구현) 툴팁으로 라우팅.
+  Future<void> _setHeadline(String text) async {
+    if (Platform.isWindows) {
+      await trayManager.setToolTip('Claudle · $text');
+    } else {
+      await trayManager.setTitle(text);
+    }
+  }
+
   Future<void> _initTray() async {
     try {
       // 아이콘이 있어야 NSStatusItem 이 표시됨. 러닝 푸들(컬러, 사용량 채움)이라
       // isTemplate=false — 회색 몸통이 라이트/다크 메뉴바 양쪽에서 보이게 그림.
       await _setDogIcon();
-      await trayManager.setTitle('…');
+      await _setHeadline('…');
       await trayManager.setToolTip('Claudle — AI 사용량');
       await trayManager.setContextMenu(
         Menu(
@@ -155,16 +168,18 @@ class _ClaudleAppState extends State<ClaudleApp>
       final left = s.resetsAt == null
           ? ''
           : ' · ${compactDuration(s.resetsAt!.difference(DateTime.now()))}';
-      trayManager.setTitle('${s.usedPercent}%$left');
+      _setHeadline('${s.usedPercent}%$left');
       return;
     }
     final t = _controller.totalsToday.value;
-    trayManager.setTitle((t == null || t.records == 0)
+    _setHeadline((t == null || t.records == 0)
         ? '…'
         : '${compactTokens(t.totalTokens)} · ${money(t.costUsd)}');
   }
 
   void _updateTrayTooltip() {
+    // Windows 는 툴팁을 헤드라인 표시에 사용하므로(타이틀 미지원) 상태로 덮어쓰지 않는다.
+    if (Platform.isWindows) return;
     trayManager.setToolTip('Claudle — ${_controller.status.value}');
   }
 

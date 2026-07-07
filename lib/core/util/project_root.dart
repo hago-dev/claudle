@@ -2,6 +2,8 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
+import 'user_home.dart';
+
 /// cwd(실제 작업 디렉토리)에서 **프로젝트 루트**를 찾는다.
 ///
 /// 하위 폴더에서 `claude` 를 실행하면 cwd basename 이 'src'/'dto'/'customer'
@@ -23,7 +25,7 @@ String projectRootOf(String cwd) {
   if (cwd.isEmpty || !p.isAbsolute(cwd)) return cwd;
   final hit = _rootCache[cwd];
   if (hit != null) return hit;
-  final homeEnv = Platform.environment['HOME'];
+  final homeEnv = userHome();
   final home =
       (homeEnv == null || homeEnv.isEmpty) ? null : p.normalize(homeEnv);
   final start = p.normalize(cwd);

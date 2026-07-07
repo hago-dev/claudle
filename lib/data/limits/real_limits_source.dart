@@ -21,7 +21,8 @@ class RealLimitsSource implements LimitsSource {
   String get id => 'claude-oauth-usage';
 
   @override
-  Future<bool> isAvailable() async => Platform.isMacOS;
+  Future<bool> isAvailable() async =>
+      Platform.isMacOS || Platform.isWindows || Platform.isLinux;
 
   @override
   Future<SubscriptionLimits?> fetch() async {
