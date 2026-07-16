@@ -70,6 +70,10 @@ String _mainUserLine(String prompt, String ts) => json.encode({
 String _aiTitleLine(String title) =>
     json.encode({'type': 'ai-title', 'aiTitle': title, 'sessionId': 'main-1'});
 
+/// 사람이 친 원문 — 메인 세션에 파일 전체로 흩어져 있고 **마지막 것이 가장 최근** 지시다.
+String _lastPromptLine(String prompt) =>
+    json.encode({'type': 'last-prompt', 'lastPrompt': prompt, 'sessionId': 'main-1'});
+
 void main() {
   late Directory tmp;
   late String subagents;
@@ -303,18 +307,21 @@ void main() {
 
   // ── 상세 로그(lazy) ──
 
-  test('readSteps: 도구 호출과 에이전트가 쓴 글을 순서대로', () {
+  test('readSteps: 첫 지시 프롬프트를 맨 앞에 전문으로, 이어서 도구·글을 순서대로', () {
     final r = byId(reader().readAll(), 'aaa');
     final steps = reader().readSteps(r.filePath);
-    expect(steps.map((s) => s.tool?.name ?? '텍스트:${s.text}'), [
+    // 맨 앞은 사람이 준 지시 전문 — 클립 없이(카드 설명은 100자로 잘려도 상세는 통째로).
+    expect(steps.first.isPrompt, isTrue);
+    expect(steps.first.text, 'a' * 150);
+    expect(steps.skip(1).map((s) => s.tool?.name ?? '텍스트:${s.text}'), [
       '텍스트:ok',
       'Bash',
       'Read',
       '텍스트:ok',
       'Bash',
     ]);
-    expect(steps[2].tool!.detail, 'single/create.dart');
-    expect(steps[0].tool, isNull);
+    expect(steps.firstWhere((s) => s.tool?.name == 'Read').tool!.detail,
+        'single/create.dart');
   });
 
   test('readSteps: 빈 텍스트 블록은 버린다', () {
@@ -325,7 +332,9 @@ void main() {
       ], '2026-07-02T12:00:01.000Z', text: '   '),
     ].join('\n'));
     final r = byId(reader().readAll(), 'ggg');
-    expect(reader().readSteps(r.filePath).map((s) => s.tool?.name), ['Read']);
+    final tools =
+        reader().readSteps(r.filePath).where((s) => s.tool != null);
+    expect(tools.map((s) => s.tool!.name), ['Read']);
   });
 
   // ── 라이브 폴링(readLive): 파일 mtime 이 최근인 것만 ──
@@ -439,6 +448,49 @@ void main() {
       _aiTitleLine('제목'),
     ]);
     expect(reader().readAll().map((r) => r.agentId).toSet(), {'aaa', 'bbb', 'ccc'});
+  });
+
+  // ── 메인 세션 상세 로그 (사용자 요구: "세션 클릭 시 그 세션이 뭘 하는지") ──
+  //
+  // 서브 상세([readSteps])와 두 가지가 다르다: ① "받은 지시" 는 첫 user 줄(몇 시간 전)이
+  // 아니라 최신 last-prompt(사람이 방금 친 것) ② 활동은 최근순 — 세션 파일은 수천 줄이라
+  // 시작부터 정순으로 두면 "지금 하는 일" 이 맨 아래 파묻힌다.
+
+  test('readMainSteps: 맨 앞은 최신 last-prompt, 이어서 활동을 최근순으로', () {
+    writeMain('main-log', [
+      _mainUserLine('세션 시작 때 친 첫 말', '2026-07-02T06:00:00.000Z'),
+      _lastPromptLine('예전 지시'),
+      _assistantLine('main-log', [
+        ('Read', {'file_path': '/a/old.dart'}),
+      ], '2026-07-02T06:00:10.000Z'),
+      _lastPromptLine('세션 클릭 시 하는 일을 보여줘'), // 마지막 = 지금 시킨 일
+      _assistantLine('main-log', [
+        ('Grep', {'pattern': '_PersonStand'}),
+        ('Edit', {'file_path': '/a/new.dart'}),
+      ], '2026-07-02T06:00:20.000Z'),
+    ]);
+    final steps = reader().readMainSteps(p.join(projectDir, 'main-log.jsonl'));
+
+    // ① 맨 앞 = 최신 last-prompt 전문(첫 user 줄이 아니라).
+    expect(steps.first.isPrompt, isTrue);
+    expect(steps.first.text, '세션 클릭 시 하는 일을 보여줘');
+
+    // ② 이어지는 활동은 최근순 — 마지막 assistant 의 블록이 먼저.
+    final activity = steps.skip(1).map((s) => s.tool?.name ?? '텍스트:${s.text}');
+    expect(activity, ['Edit', 'Grep', '텍스트:ok', 'Read', '텍스트:ok']);
+  });
+
+  test('readMainSteps: last-prompt 이 없으면 첫 user 줄을 지시로 폴백', () {
+    writeMain('main-noprompt', [
+      _mainUserLine('첫 user 줄이 곧 지시', '2026-07-02T06:00:00.000Z'),
+      _assistantLine('main-noprompt', [
+        ('Read', {'file_path': '/a/b.dart'}),
+      ], '2026-07-02T06:00:05.000Z'),
+    ]);
+    final steps =
+        reader().readMainSteps(p.join(projectDir, 'main-noprompt.jsonl'));
+    expect(steps.first.isPrompt, isTrue);
+    expect(steps.first.text, '첫 user 줄이 곧 지시');
   });
 
   // ── 그룹 제목 (사용자 요구: "워크플로우 ID 대신 사람이 읽는 타이틀") ──

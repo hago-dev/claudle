@@ -163,10 +163,20 @@ class AgentRunReader {
   /// 수 KB 를 늘 들고 있게 되고, 정작 보는 건 한 번에 한 마리다.
   List<AgentStep> readSteps(String filePath) {
     final steps = <AgentStep>[];
+    var promptSeen = false;
     for (final line in _lines(File(filePath))) {
       final message = line['message'];
       if (message is! Map) continue;
       final content = message['content'];
+      // 첫 `type:"user"`(content 가 String) = 받은 지시. 카드 설명과 달리 클립하지 않는다 —
+      // 상세 로그는 "무엇을 하라고 시켰나" 를 전문으로 보여주는 자리다. 도구 결과는 content 가
+      // List 라 여기 안 걸린다(첫 지시 한 번만).
+      if (!promptSeen && line['type'] == 'user' && content is String) {
+        promptSeen = true;
+        final prompt = _oneLine(content);
+        if (prompt.isNotEmpty) steps.add(AgentStep.prompt(prompt));
+        continue;
+      }
       if (content is! List) continue;
       for (final block in content) {
         if (block is! Map) continue;
@@ -180,6 +190,48 @@ class AgentRunReader {
       }
     }
     return steps;
+  }
+
+  /// 메인 세션 1개의 "지금 하는 일" 로그 — 서브의 [readSteps] 와 두 가지가 다르다.
+  ///
+  ///  ① 받은 지시 = 최신 `last-prompt`(사람이 방금 친 것). 서브는 첫 `user` 줄이 곧 지시지만
+  ///     메인의 첫 `user` 줄은 몇 시간 전 세션 시작이라 "지금" 이 아니다. 없으면 첫 `user` 로 폴백.
+  ///  ② 활동은 **최근순**(파일 역순). 세션 파일은 수천 줄이라 정순으로 두면 지금 하는 일이 맨
+  ///     아래 파묻힌다 — 클릭한 사람이 보려는 건 방금 한 일이다.
+  ///
+  /// [readSteps] 와 마찬가지로 클릭 시 그 파일만 읽는다(라이브 씬은 이 로그를 늘 들고 있지 않다).
+  List<AgentStep> readMainSteps(String filePath) {
+    String? lastPrompt, firstUser;
+    final activity = <AgentStep>[];
+    for (final line in _lines(File(filePath))) {
+      if (line['type'] == 'last-prompt') {
+        final last = line['lastPrompt'];
+        if (last is String && last.trim().isNotEmpty) lastPrompt = last; // 마지막 = 최신
+        continue;
+      }
+      final message = line['message'];
+      if (message is! Map) continue;
+      final content = message['content'];
+      if (firstUser == null && line['type'] == 'user' && content is String) {
+        firstUser = content;
+      }
+      if (content is! List) continue;
+      for (final block in content) {
+        if (block is! Map) continue;
+        switch (block['type']) {
+          case 'text':
+            final text = _oneLine((block['text'] as String?) ?? '');
+            if (text.isNotEmpty) activity.add(AgentStep.text(text));
+          case 'tool_use':
+            activity.add(AgentStep.toolUse(_toolCall(block)));
+        }
+      }
+    }
+    final prompt = _oneLine(lastPrompt ?? firstUser ?? '');
+    return [
+      if (prompt.isNotEmpty) AgentStep.prompt(prompt),
+      ...activity.reversed, // 최근이 앞
+    ];
   }
 
   /// 파일의 줄들(원문). 읽기 실패(라이브 세션 중 사라짐 등)면 빈 목록.

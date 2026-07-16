@@ -11,17 +11,29 @@ class ToolCall {
   const ToolCall(this.name, this.detail);
 }
 
-/// 상세 로그 한 줄 — 에이전트가 쓴 텍스트([tool] == null) 이거나 도구 호출이거나.
+/// 상세 로그 한 줄 — 사람이 준 지시([isPrompt]) 이거나, 에이전트가 쓴 텍스트([tool] == null)
+/// 이거나, 도구 호출([tool] != null) 이거나.
 ///
 /// 파일 하나를 다시 읽어야 나온다([AgentRunReader.readSteps]) — [AgentRun] 에 늘 담기엔 크다.
 class AgentStep {
   final ToolCall? tool;
 
-  /// 에이전트가 쓴 텍스트. [tool] 이 있으면 ''.
+  /// 지시([isPrompt]) 면 첫 프롬프트 전문, 아니면 에이전트가 쓴 텍스트. [tool] 이 있으면 ''.
   final String text;
 
-  const AgentStep.text(this.text) : tool = null;
-  const AgentStep.toolUse(ToolCall this.tool) : text = '';
+  /// 사람이 이 마리에게 준 첫 지시(전문). 카드 설명은 100자로 잘리지만 이건 통째로 —
+  /// 상세 로그 맨 앞에서 "무엇을 하라고 시켰나" 를 그대로 보여준다.
+  final bool isPrompt;
+
+  const AgentStep.text(this.text)
+      : tool = null,
+        isPrompt = false;
+  const AgentStep.toolUse(ToolCall this.tool)
+      : text = '',
+        isPrompt = false;
+  const AgentStep.prompt(this.text)
+      : tool = null,
+        isPrompt = true;
 }
 
 /// 메인 세션(사람이 직접 대화하는 그 세션) 의 [AgentRun.agentType].

@@ -23,10 +23,24 @@ List<AgentRun> _readLiveRuns() => AgentRunReader().readLive();
 List<AgentStep> _readSteps(String filePath) =>
     AgentRunReader().readSteps(filePath);
 
+/// 메인 세션(사람) 클릭 상세 — 서브와 달리 지시=최신 last-prompt, 활동=최근순([readMainSteps]).
+List<AgentStep> _readMainSteps(String filePath) =>
+    AgentRunReader().readMainSteps(filePath);
+
 /// 그룹 제목 진입점 — 그룹 확정 뒤 대표 1건씩만 넘긴다(실측 134개). 세션 파일이 커서
 /// 실측 ~0.95초 — UI 스레드에서 부르면 그동안 프레임이 통째로 멈춘다.
 Map<String, String> _readTitles(List<AgentRun> representatives) =>
     AgentRunReader().readTitles(representatives);
+
+/// 제목 읽기의 아이솔레이트 스폰 — **반드시 이 톱레벨의 깨끗한 스코프에서 클로저를 만든다.**
+///
+/// Dart 는 같은 스코프의 클로저들이 캡처 Context 를 공유한다 — `_load` 안에서
+/// `Isolate.run(() => _readTitles(reps))` 를 만들면 이웃 setState 클로저가 캡처한
+/// State(→ Element·Ticker, unsendable)까지 스폰 메시지에 통째로 끌려가
+/// "object is unsendable - _AsyncCompleter" 로 터진다(실기기 크래시).
+@visibleForTesting
+Future<Map<String, String>> titlesInIsolate(List<AgentRun> representatives) =>
+    Isolate.run(() => _readTitles(representatives));
 
 /// 에이전트 시각화 화면 — 서브에이전트 1개 = 캐릭터 1마리.
 ///
@@ -131,10 +145,10 @@ class _AgentsScreenState extends State<AgentsScreen>
       if (!mounted) return;
       final groups = _groupRuns(runs);
       // 제목은 그룹을 확정한 **뒤에** — 제목 파일은 그룹마다 하나뿐이라 readAll 이 읽은
-      // 1400 파일을 다시 읽을 일이 아니다. 대표 1건씩만 아이솔레이트로 넘긴다(클로저가
-      // State 를 잡으면 넘어가지 못하므로 목록을 미리 만들어 둔다).
+      // 1400 파일을 다시 읽을 일이 아니다. 스폰은 [titlesInIsolate] 에서 — 여기서
+      // 클로저를 만들면 이웃 setState 클로저가 캡처한 State 가 끌려가 스폰이 터진다.
       final reps = [for (final g in groups) g.runs.first];
-      final titles = await Isolate.run(() => _readTitles(reps));
+      final titles = await titlesInIsolate(reps);
       if (!mounted) return;
       setState(() {
         _runs = runs;
@@ -661,7 +675,7 @@ class _AgentCard extends StatelessWidget {
               child: Align(
                 alignment: Alignment.bottomCenter, // 바닥에서 콩콩 뛰게
                 child: _Critter(
-                  sprite: 'animal-${agentAnimal(run.agentType)}',
+                  sprite: agentSprite(run),
                   phase: phase,
                   running: state == _RunState.running,
                 ),
@@ -726,11 +740,15 @@ class _AgentCard extends StatelessWidget {
 /// 타입 이름표 — 카드와 상세 로그 머리말이 같이 쓴다.
 class _TypeBadge extends StatelessWidget {
   final String agentType;
-  const _TypeBadge({required this.agentType});
+
+  /// 배지 색 강제 — 라이브 시트가 클릭한 마리의 랜덤 색을 시트 전체와 맞출 때.
+  /// null = 타입색([agentColor], 기록 쪽 기본).
+  final Color? color;
+  const _TypeBadge({required this.agentType, this.color});
 
   @override
   Widget build(BuildContext context) {
-    final color = agentColor(agentType);
+    final color = this.color ?? agentColor(agentType);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
@@ -738,7 +756,8 @@ class _TypeBadge extends StatelessWidget {
         borderRadius: BorderRadius.circular(4),
       ),
       child: Text(
-        agentType,
+        // 메인은 카테고리가 아니라 '그 세션(사람)' 이다 — 'main' 원문 대신 사람 말로.
+        agentType == mainAgentType ? '세션' : agentType,
         style: TextStyle(
           fontSize: 11,
           fontWeight: FontWeight.w600,
@@ -869,7 +888,25 @@ IconData _toolIcon(String tool) {
 /// 카드의 아이콘 줄로는 "Read 를 12번 했다" 까지고, **뭘** 읽었는지는 여기서 본다.
 class _AgentLogSheet extends StatefulWidget {
   final AgentRun run;
-  const _AgentLogSheet({required this.run});
+
+  /// 메인 세션(사람)인가 — 서브(동물)면 false. 상세를 [_readMainSteps](지시=최신
+  /// last-prompt·활동 최근순)로 읽고 머리말을 동물이 아니라 사람 스프라이트로 그린다.
+  final bool live;
+
+  /// 씬에서 클릭한 그 마리의 스프라이트 — 라이브 종은 등장마다 섞여서 run 만으론 복원이
+  /// 안 된다(안 넘기면 클릭한 펭귄의 시트에 다른 동물이 뜬다). null = 기록에서 열림 →
+  /// [agentSprite] 폴백(재생 카드와 같은 결정론 배정이라 어긋날 일이 없다).
+  final String? sprite;
+
+  /// 씬에서 클릭한 그 마리의 색 — [sprite] 와 같은 이유(라이브 색도 등장마다 섞인다).
+  /// null = 기록에서 열림 → [agentColor] 폴백.
+  final Color? color;
+  const _AgentLogSheet({
+    required this.run,
+    this.live = false,
+    this.sprite,
+    this.color,
+  });
 
   @override
   State<_AgentLogSheet> createState() => _AgentLogSheetState();
@@ -883,13 +920,14 @@ class _AgentLogSheetState extends State<_AgentLogSheet> {
     super.initState();
     // 경로만 아이솔레이트로 넘긴다 — 클로저가 State 를 잡으면 넘어가지 못한다.
     final path = widget.run.filePath;
-    _steps = Isolate.run(() => _readSteps(path));
+    final live = widget.live;
+    _steps = Isolate.run(() => live ? _readMainSteps(path) : _readSteps(path));
   }
 
   @override
   Widget build(BuildContext context) {
     final run = widget.run;
-    final color = agentColor(run.agentType);
+    final color = widget.color ?? agentColor(run.agentType);
     return FractionallySizedBox(
       heightFactor: 0.85,
       child: Column(
@@ -904,7 +942,10 @@ class _AgentLogSheetState extends State<_AgentLogSheet> {
                   width: 48,
                   height: 48,
                   child: _Critter(
-                    sprite: 'animal-${agentAnimal(run.agentType)}',
+                    // 사람(메인)은 사람 스프라이트, 동물(서브)은 종. 씬의 배정과 같게.
+                    sprite: widget.live
+                        ? personSprite(run.sessionId)
+                        : widget.sprite ?? agentSprite(run),
                     phase: 0,
                     running: false, // 머리말은 정지
                     size: 44,
@@ -917,7 +958,8 @@ class _AgentLogSheetState extends State<_AgentLogSheet> {
                     children: [
                       Row(
                         children: [
-                          _TypeBadge(agentType: run.agentType),
+                          // 시트 악센트(도구줄·지시판)와 배지가 한 색이어야 읽힌다.
+                          _TypeBadge(agentType: run.agentType, color: color),
                           const SizedBox(width: 8),
                           Text(
                             '${_projectLabel(run.project)} · '
@@ -992,7 +1034,7 @@ class _AgentLogSheetState extends State<_AgentLogSheet> {
   }
 }
 
-/// 로그 한 줄 — 도구 호출이거나, 에이전트가 쓴 글이거나.
+/// 로그 한 줄 — 받은 지시([AgentStep.isPrompt])거나, 도구 호출이거나, 에이전트가 쓴 글이거나.
 class _StepRow extends StatelessWidget {
   final AgentStep step;
   final Color color;
@@ -1000,6 +1042,8 @@ class _StepRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    if (step.isPrompt) return _prompt(scheme);
     final tool = step.tool;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 3),
@@ -1012,10 +1056,99 @@ class _StepRow extends StatelessWidget {
               style: TextStyle(
                 fontSize: 11,
                 height: 1.4,
-                color:
-                    Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
+                color: scheme.onSurface.withValues(alpha: 0.6),
               ),
             ),
+    );
+  }
+
+  /// 받은 지시 전문 — 로그 맨 앞. "Write path" 한 줄이 아니라 뭘 하라고 시켰는지 통째로.
+  /// 타입색 왼쪽 띠 + 옅은 판으로 도구/글 줄과 구분한다. 길면(워크플로우 공유 프롬프트는
+  /// 수천 자) 시트 안에서 접었다 펼 수 있게 [_ExpandableText] 로 감싼다.
+  Widget _prompt(ColorScheme scheme) => Container(
+        margin: const EdgeInsets.only(top: 2, bottom: 10),
+        padding: const EdgeInsets.fromLTRB(11, 9, 11, 10),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.07),
+          borderRadius: BorderRadius.circular(6),
+          border: Border(left: BorderSide(color: color, width: 3)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('받은 지시',
+                style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    color: color)),
+            const SizedBox(height: 5),
+            _ExpandableText(
+              text: step.text,
+              style: TextStyle(
+                fontSize: 12,
+                height: 1.45,
+                color: scheme.onSurface.withValues(alpha: 0.9),
+              ),
+            ),
+          ],
+        ),
+      );
+}
+
+/// 긴 지시 프롬프트 — 처음엔 8줄까지, 넘치면 "더 보기" 로 전문을 편다.
+/// 워크플로우 팬아웃 프롬프트는 공유 접두사가 수천 자라 처음부터 다 펴면 로그가 안 보인다.
+class _ExpandableText extends StatefulWidget {
+  final String text;
+  final TextStyle style;
+  const _ExpandableText({required this.text, required this.style});
+
+  @override
+  State<_ExpandableText> createState() => _ExpandableTextState();
+}
+
+class _ExpandableTextState extends State<_ExpandableText> {
+  static const _collapsedLines = 8;
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    // 접힘 상태에서 실제로 잘리는지 본 뒤에만 "더 보기" 를 단다 — 짧은 지시엔 버튼이 없다.
+    return LayoutBuilder(
+      builder: (context, box) {
+        final tp = TextPainter(
+          text: TextSpan(text: widget.text, style: widget.style),
+          maxLines: _collapsedLines,
+          textDirection: Directionality.of(context),
+        )..layout(maxWidth: box.maxWidth);
+        final overflows = tp.didExceedMaxLines;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              widget.text,
+              maxLines: _expanded ? null : _collapsedLines,
+              overflow:
+                  _expanded ? TextOverflow.clip : TextOverflow.ellipsis,
+              style: widget.style,
+            ),
+            if (overflows)
+              GestureDetector(
+                onTap: () => setState(() => _expanded = !_expanded),
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    _expanded ? '접기' : '더 보기',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        );
+      },
     );
   }
 }
@@ -1024,6 +1157,7 @@ class _StepRow extends StatelessWidget {
 
 /// 자주 보이는 타입은 고정 색(눈에 익게), 나머지 롱테일(총 23종)은 이름 해시 → 팔레트.
 const Map<String, Color> _fixedColors = {
+  mainAgentType: Color(0xFFCBD5E1), // 세션(사람) — 중립 슬레이트, 종별 색과 안 겹치게
   'workflow-subagent': Color(0xFF7C5CFF), // 앱 시드 바이올렛
   'delegate': Color(0xFF4ADE80),
   'general-purpose': Color(0xFF38BDF8),
@@ -1046,8 +1180,11 @@ const List<Color> _palette = [
   Color(0xFF94A3B8),
 ];
 
-/// 타입별 색. 해시는 직접 계산한다 — `String.hashCode` 는 런타임이 바꿀 수 있어
-/// 실행할 때마다 색이 달라질 수 있다(같은 에이전트는 늘 같은 색이어야 함).
+/// **기록·배지** 쪽 타입별 색 — 재생 카드와 구성 미리보기 색점이 "어떤 타입 조합인지" 를
+/// 읽는 자리라 결정론을 유지한다. 해시는 직접 계산 — `String.hashCode` 는 런타임이 바꿀 수 있다.
+///
+/// **라이브는 이걸 안 쓴다** — 색도 등장마다 섞여야 한다는 사용자 요구로 [_ForestScene.sync]
+/// 가 [randomAgentColor] 로 뽑고, 시트엔 그 마리의 색을 넘긴다(종과 같은 규약).
 Color agentColor(String agentType) {
   final fixed = _fixedColors[agentType];
   if (fixed != null) return fixed;
@@ -1057,6 +1194,18 @@ Color agentColor(String agentType) {
   }
   return _palette[h % _palette.length];
 }
+
+/// 라이브 랜덤 추첨용 색 풀 — 타입 고정색(사람용 슬레이트 제외) + 해시 팔레트의 합집합.
+/// 따로 안 만들고 합쳐 쓴다: 이미 라벨·배지에서 검증된 색들이고, 타입색이 늘면 풀도 따라 는다.
+final List<Color> _colorPool = [
+  for (final e in _fixedColors.entries)
+    if (e.key != mainAgentType) e.value,
+  ..._palette,
+];
+
+/// **라이브** 등장 1회 = 새로 섞은 색 하나 — [randomAnimalSprite] 와 같은 규약(사용자:
+/// "색상도 여러 가지였으면"). 종과 독립으로 뽑아 같은 종끼리도 색이 갈린다.
+Color randomAgentColor(math.Random rnd) => _colorPool[rnd.nextInt(_colorPool.length)];
 
 // ── 그룹 ────────────────────────────────────────────────────
 
@@ -1107,6 +1256,16 @@ List<_RunGroup> _groupRuns(List<AgentRun> runs) {
   return groups;
 }
 
+/// 씬 발밑 이름표 — 이 마리가 받은 지시를 짧게. 없으면(워크플로우 라이브는 description 이
+/// 프롬프트 꼬리라 대개 있다) 타입으로 폴백. 셀이 104px 라 [_labelMaxChars] 자에서 자른다.
+String _actionLabel(AgentRun run) {
+  final desc = run.description.trim();
+  final base = desc.isEmpty ? run.agentType : desc;
+  return base.characters.length > _labelMaxChars
+      ? '${base.characters.take(_labelMaxChars)}…'
+      : base;
+}
+
 /// 에이전트 소요시간은 대부분 분 미만이라 [compactDuration] 은 죄다 '0m' 이 된다 → 초까지.
 String _elapsed(Duration d) {
   if (d.isNegative) return '0s';
@@ -1125,25 +1284,6 @@ String _projectLabel(String encoded) {
 
 // ── 캐릭터(큐브펫) ────────────────────────────────────────────
 
-/// 의미가 맞는 타입은 고정 배정(눈에 익게), 나머지는 아래 해시로 24종 중 결정론적 선택.
-const Map<String, String> _fixedAnimals = {
-  'delegate': 'dog',
-  'Explore': 'fox',
-  'red-team': 'tiger',
-  'security-auditor': 'polar', // 북극곰
-  'researcher': 'monkey',
-  'code-reviewer': 'cat',
-  'test-writer': 'beaver',
-  'workflow-subagent': 'bee',
-  'mentor': 'elephant',
-  'Plan': 'giraffe',
-  'doc-generator': 'parrot',
-  'general-purpose': 'bunny',
-  'first-principles': 'lion',
-  'db-specialist': 'crab',
-  'claude-code-guide': 'koala',
-};
-
 /// `assets/agents/animal-<name>.png` 24종. 해시 배정 풀이자 declared asset 목록과 1:1.
 const List<String> _animalPool = [
   'beaver', 'bee', 'bunny', 'cat', 'caterpillar', 'chick', 'cow', 'crab',
@@ -1151,18 +1291,26 @@ const List<String> _animalPool = [
   'lion', 'monkey', 'panda', 'parrot', 'penguin', 'pig', 'polar', 'tiger',
 ];
 
-/// 타입 → 큐브펫 이름. 해시는 [agentColor] 와 같은 방식으로 직접 계산한다 —
-/// `String.hashCode` 는 실행마다 바뀔 수 있어(같은 에이전트는 늘 같은 동물이어야 함).
-String agentAnimal(String agentType) {
-  final fixed = _fixedAnimals[agentType];
-  if (fixed != null) return fixed;
-  if (agentType.startsWith('qa-')) return 'chick'; // qa-triage 등
+/// **기록** 쪽 마리 → 스프라이트(`assets/agents/animal-<종>.png`). 종은 타입이 아니라
+/// 개체(agentId) 해시 — 타입 고정 배정(delegate=개)은 팬아웃이 전부 같은 동물이라 심심하다는
+/// 사용자 요구로 버렸다. 결정론인 이유: 재생 카드와 그 시트가 같은 동물을 가리켜야 해서
+/// (어긋나면 클릭한 펭귄의 시트에 개가 뜬다). 해시는 [agentColor] 와 같은 h*31+c 직접 계산.
+///
+/// **라이브는 이걸 안 쓴다** — 등장할 때마다 종이 다시 섞여야 한다는 사용자 요구로
+/// [_ForestScene.sync] 가 [randomAnimalSprite] 로 뽑고, 시트엔 그 마리의 스프라이트를 넘긴다.
+String agentSprite(AgentRun run) {
   var h = 0;
-  for (final c in agentType.codeUnits) {
+  for (final c in run.agentId.codeUnits) {
     h = (h * 31 + c) & 0x7fffffff;
   }
-  return _animalPool[h % _animalPool.length];
+  return 'animal-${_animalPool[h % _animalPool.length]}';
 }
+
+/// **라이브** 등장 1회 = 새로 섞은 종 하나. 씬에 나타나는 순간 [_ForestScene._rnd] 로 뽑아
+/// [_Beast.sprite] 에 저장한다 — 화면에 있는 동안엔 유지(매 폴링 섞으면 2초마다 종이 바뀌는
+/// 스트로브가 된다), 떠났다 다시 등장하면 새 종. 랜덤 소스는 호출자가 준다(테스트가 시드를 쥔다).
+String randomAnimalSprite(math.Random rnd) =>
+    'animal-${_animalPool[rnd.nextInt(_animalPool.length)]}';
 
 /// `assets/agents/character-<...>.png` 12종 — 서브를 스폰한 메인(부모)을 상징하는 사람.
 /// 동물이 서브에이전트라면 이쪽은 그 위의 감독자(세션).
@@ -1174,7 +1322,7 @@ const List<String> _personPool = [
 ];
 
 /// 세션 → 사람 스프라이트. 같은 세션(그 세션이 스폰한 서브들의 부모)은 늘 같은 사람이 되게
-/// [agentColor]·[agentAnimal] 과 같은 h*31+c 로 직접 계산한다(실행마다 안 바뀌게).
+/// [agentColor]·[agentSprite] 와 같은 h*31+c 로 직접 계산한다(실행마다 안 바뀌게).
 String personSprite(String sessionId) {
   var h = 0;
   for (final c in sessionId.codeUnits) {
@@ -1233,7 +1381,7 @@ class _Critter extends StatelessWidget {
 //
 // 단순화: 인파일 섹션 — 원래 lib/presentation/forest_scene.dart 로 뺄 서브시스템이다.
 // 필요 시 이 섹션 전체를 그대로 옮기면 된다(위쪽 카드 UI 와 공유하는 건 _Critter·
-// _TypeBadge·_AgentLogSheet·_toolIcon·agentColor/agentAnimal/personSprite 뿐).
+// _TypeBadge·_AgentLogSheet·_toolIcon·agentColor/agentSprite/personSprite 뿐).
 
 // 씬 구획
 const _padX = 24.0, _playTopGap = 30.0, _playPadBottom = 20.0, _minColW = 300.0;
@@ -1254,6 +1402,8 @@ const _restMin = 0.4, _restVar = 1.2, _repick = 6.0, _maxDt = 0.05;
 const _spawnJitter = 14.0, _fadeOut = 0.45;
 // 상한
 const _labelMax = 12, _beastMax = 48;
+// 발밑 이름표(동작명) 글자 수 — 104px 셀에 한 줄. 넘치면 …. 사용자 요청("한 10글자").
+const _labelMaxChars = 10;
 // 팔레트 — 앱은 dark 단일(main.dart). 숲은 초록이라 시드(바이올렛)를 안 따른다(의도).
 const _skyTop = Color(0xFF16281C), _skyBottom = Color(0xFF2A4A31);
 const _plateBg = Color(0xB3101A14);
@@ -1295,7 +1445,7 @@ const _backKinds = [
 /// 콩콩 파형(0..1, 위로) — 한 위상에 두 번. [_Critter] 와 숲 씬의 발밑 그림자가 같이 쓴다.
 double hopWave(double phase) => math.sin(phase * 2 * math.pi).abs();
 
-/// 씬 배치용 결정론 해시 — [agentColor]·[agentAnimal]·[personSprite] 와 같은 h*31+c 규약.
+/// 씬 배치용 결정론 해시 — [agentColor]·[agentSprite]·[personSprite] 와 같은 h*31+c 규약.
 /// [salt] 로 같은 키에서 독립된 값을 여러 개 뽑는다(x·y·종류). 폴링마다 숲이 춤추지 않게.
 int _sceneHash(String key, int salt) {
   var h = salt & 0x7fffffff;
@@ -1318,12 +1468,11 @@ class _Prop {
 
 /// 세션 1개 = 세로 열 1개. 사람은 빈터 **위**에 고정, 동물은 빈터([play]) 안에서만 논다.
 class _Clearing {
-  final String sessionId, project, sprite; // sprite = personSprite(sessionId)
+  final String sessionId, sprite; // sprite = personSprite(sessionId)
   final Offset personFeet;
   final Rect play;
   const _Clearing({
     required this.sessionId,
-    required this.project,
     required this.sprite,
     required this.personFeet,
     required this.play,
@@ -1332,7 +1481,7 @@ class _Clearing {
 
 /// 씬 안의 동물 한 마리 = 도는 서브 1개. [run] 은 폴링마다 갈리지만 위치·기분은 이어진다.
 class _Beast {
-  final String agentId, sprite; // 'animal-fox' — agentAnimal 로 1회 결정
+  final String agentId, sprite; // 'animal-fox' — agentSprite 로 1회 결정
   final Color color; // agentColor(agentType)
   AgentRun run; // 폴링마다 교체(final 아님)
   String sessionId;
@@ -1359,13 +1508,17 @@ class _Beast {
 class _ForestScene extends ChangeNotifier {
   final _beasts = <String, _Beast>{};
   final _byId = <String, _Clearing>{}; // sessionId → 빈터
-  final _rnd = math.Random(); // 움직임은 결정론이 아니다 — 정체성(동물·색·사람)만 해시로 고정한다
-  Map<String, String> _projectOf = const {}; // sessionId → project
+  final _rnd = math.Random(); // 움직임·종·색(등장마다 섞임)은 결정론이 아니다 — 사람만 해시로 고정한다
   Map<String, AgentRun> _mainOf = const {}; // sessionId → 지금 도는 메인(사람이 하는 일)
 
   /// sessionId → 최신 ai-title. **붙잡아 둔다** — 메인 세션 파일은 서브가 도는 동안 안 쓰여서
   /// mtime 창을 들락거린다. 매번 [_mainOf] 에서 읽으면 이름표가 제목 ↔ 세션ID 로 깜빡인다.
   final _titleOf = <String, String>{};
+
+  /// sessionId → 마지막으로 본 메인 실행. [_titleOf] 와 같은 이유로 **붙잡아 둔다** — 사람을
+  /// 클릭했을 때 그 세션의 상세 로그를 열 filePath 가 필요한데, 서브가 도는 동안 메인이 창 밖으로
+  /// 빠져 [_mainOf] 가 비어도 클릭은 먹혀야 한다(마지막 본 실행의 경로로 파일을 다시 읽는다).
+  final _mainRunOf = <String, AgentRun>{};
 
   List<String> _sessions = const [];
   Size _size = Size.zero;
@@ -1389,6 +1542,10 @@ class _ForestScene extends ChangeNotifier {
   /// 이 세션의 사람이 읽는 제목(최신 ai-title). null = 아직 한 번도 못 봤다 → 세션ID 폴백.
   String? titleOf(String sessionId) => _titleOf[sessionId];
 
+  /// 이 세션 사람을 클릭했을 때 상세를 읽을 메인 실행. null = 이 열이 사는 동안 메인을 한 번도
+  /// 라이브로 못 봤다(앱을 팬아웃 도중 열어 메인이 창 밖) → 클릭 비활성, 다음 폴링에 낫는다.
+  AgentRun? mainRunOf(String sessionId) => _mainRunOf[sessionId];
+
   /// 창 크기 변화 — [LayoutBuilder] 안에서 부른다. **notify 금지**.
   void resize(Size s) {
     if (s == _size) return;
@@ -1398,7 +1555,7 @@ class _ForestScene extends ChangeNotifier {
 
   /// 폴링 결과를 맞춘다 — 위치·기분은 그대로 두고 목록만. **notify 금지**.
   void sync(List<AgentRun> runs) {
-    // 메인 세션은 사람이라 동물로 만들지 않는다(agentAnimal 해시를 타면 안 된다) —
+    // 메인 세션은 사람이라 동물로 만들지 않는다(agentSprite 해시를 타면 안 된다) —
     // 서브와 갈리는 지점은 씬 전체에서 여기 하나뿐이고, 아래는 전부 서브(동물) 얘기다.
     final mains = <String, AgentRun>{};
     final subs = <AgentRun>[];
@@ -1412,6 +1569,7 @@ class _ForestScene extends ChangeNotifier {
     _mainOf = mains;
     for (final r in mains.values) {
       if (r.description.isNotEmpty) _titleOf[r.sessionId] = r.description;
+      _mainRunOf[r.sessionId] = r; // 클릭 대상 filePath 확보(창 밖으로 빠져도 남는다)
     }
 
     // 48 상한. startedAt 오름차순 = 폴링마다 집합이 안 흔들리는 안정 기준.
@@ -1428,8 +1586,8 @@ class _ForestScene extends ChangeNotifier {
         // 2초마다 전원이 리셋된다.
         _beasts[r.agentId] = _Beast(
           agentId: r.agentId,
-          sprite: 'animal-${agentAnimal(r.agentType)}',
-          color: agentColor(r.agentType),
+          sprite: randomAnimalSprite(_rnd), // 등장마다 새로 섞는다(사용자 요구)
+          color: randomAgentColor(_rnd), // 색도 같은 규약 — 종과 독립 추첨
           run: r,
           sessionId: r.sessionId,
         );
@@ -1451,16 +1609,13 @@ class _ForestScene extends ChangeNotifier {
     // 제 빈터를 갖는다" 가 불변식이 된다(마지막 한 마리가 빠진 열은 다음 폴링에 접힌다).
     // 메인을 더하는 게 요구의 핵심이다: 서브 없이 프롬프트만 돌아도(= 동물 0마리) 열이 서고
     // 사람이 캠프에 선다.
-    final projects = <String, String>{};
-    for (final b in _beasts.values) {
-      projects.putIfAbsent(b.sessionId, () => b.run.project);
-    }
-    for (final r in mains.values) {
-      projects.putIfAbsent(r.sessionId, () => r.project);
-    }
-    final sessions = projects.keys.toList()..sort(); // readLive 는 mtime 순 → 정렬 안 하면 2초마다 사람이 자리를 바꾼다
-    _projectOf = projects;
-    _titleOf.removeWhere((sid, _) => !projects.containsKey(sid)); // 열이 접히면 제목도 버린다
+    final ids = <String>{
+      for (final b in _beasts.values) b.sessionId,
+      for (final r in mains.values) r.sessionId,
+    };
+    final sessions = ids.toList()..sort(); // readLive 는 mtime 순 → 정렬 안 하면 2초마다 사람이 자리를 바꾼다
+    _titleOf.removeWhere((sid, _) => !ids.contains(sid)); // 열이 접히면 제목도 버린다
+    _mainRunOf.removeWhere((sid, _) => !ids.contains(sid)); // 제목과 같은 생명주기
     // 열 구성이 그대로면(대개 그렇다) 열·소품을 다시 계산하지 않는다 — 2초마다 숲이 춤추지 않게.
     // 이미 깔린 것(_byId)과 비교하므로 크기가 0이라 걸러진 레이아웃도 다음 기회에 스스로 낫는다.
     if (sessions.length == _byId.length && sessions.every(_byId.containsKey)) {
@@ -1606,7 +1761,6 @@ class _ForestScene extends ChangeNotifier {
       );
       cs.add(_Clearing(
         sessionId: sid,
-        project: _projectOf[sid] ?? '',
         sprite: personSprite(sid),
         personFeet: personFeet,
         play: play,
@@ -1779,6 +1933,7 @@ class _ForestSceneState extends State<_ForestSceneView>
             clock: _scene.clock,
             index: i,
             main: _scene.mainOf(_scene.clearings[i].sessionId),
+            mainRun: _scene.mainRunOf(_scene.clearings[i].sessionId),
             title: _scene.titleOf(_scene.clearings[i].sessionId),
           ),
         for (final b in ws) _cell(b, label),
@@ -1894,13 +2049,20 @@ class _PersonStand extends StatelessWidget {
   final _Clearing c;
   final double clock;
   final int index;
+
+  /// 지금 도는 메인(60초 이내 갱신). null = 조용함 → 머리 위 도구 칩을 안 단다.
   final AgentRun? main;
+
+  /// 클릭 시 상세를 읽을 메인 실행 — [main] 이 조용해도 마지막 본 것을 붙잡고 있어([_mainRunOf])
+  /// 여기로 온다. null 이면 이 열이 사는 동안 메인을 한 번도 못 봐서 열 자체가 안 눌린다.
+  final AgentRun? mainRun;
   final String? title;
   const _PersonStand({
     required this.c,
     required this.clock,
     required this.index,
     required this.main,
+    required this.mainRun,
     required this.title,
   });
 
@@ -1922,14 +2084,7 @@ class _PersonStand extends StatelessWidget {
             left: 0,
             right: 0,
             top: spriteTop + breathe,
-            child: Center(
-              child: _Critter(
-                sprite: c.sprite,
-                phase: 0,
-                running: false, // 사람은 서 있는다 — 뛰는 건 동물뿐
-                size: _personSize,
-              ),
-            ),
+            child: Center(child: _person(context)),
           ),
           Positioned(
             left: 0,
@@ -1948,7 +2103,6 @@ class _PersonStand extends StatelessWidget {
                   Flexible(
                     child: _SessionPlate(
                       sessionId: c.sessionId,
-                      project: c.project,
                       title: title,
                     ),
                   ),
@@ -1957,6 +2111,40 @@ class _PersonStand extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  /// 사람 스프라이트 — [mainRun] 이 있으면 눌러서 그 세션이 **지금 하는 일**을 연다(동물의
+  /// 탭과 같은 [_AgentLogSheet], `live` 로 지시=최신 last-prompt·활동 최근순). 없으면 그냥 스프라이트.
+  Widget _person(BuildContext context) {
+    final sprite = _Critter(
+      sprite: c.sprite,
+      phase: 0,
+      running: false, // 사람은 서 있는다 — 뛰는 건 동물뿐
+      size: _personSize,
+    );
+    final run = mainRun;
+    if (run == null) return sprite; // 아직 메인을 못 봤다 → 열 자체가 안 눌린다
+    final tool = main == null || main!.toolCalls.isEmpty ? null : main!.toolCalls.last;
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: Tooltip(
+        waitDuration: const Duration(milliseconds: 250),
+        message: '${title ?? '세션'}\n'
+            '${_projectLabel(run.project)} · '
+            '${compactTokens(run.inputTokens + run.outputTokens)} tokens · '
+            '도구 ${run.toolCalls.length}회'
+            '${tool == null ? '' : '\n▸ ${tool.name} ${tool.detail}'}',
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque, // Image 는 hitTestSelf=false
+          onTap: () => showModalBottomSheet<void>(
+            context: context,
+            isScrollControlled: true,
+            builder: (_) => _AgentLogSheet(run: run, live: true),
+          ),
+          child: sprite,
+        ),
       ),
     );
   }
@@ -2036,7 +2224,9 @@ class _SceneCritter extends StatelessWidget {
                     onTap: () => showModalBottomSheet<void>(
                       context: context,
                       isScrollControlled: true,
-                      builder: (_) => _AgentLogSheet(run: b.run),
+                      // 씬의 종·색을 그대로 — 라이브 배정은 등장마다 섞여 run 으로 복원 불가.
+                      builder: (_) => _AgentLogSheet(
+                          run: b.run, sprite: b.sprite, color: b.color),
                     ),
                     child: _Critter(
                       sprite: b.sprite,
@@ -2049,7 +2239,9 @@ class _SceneCritter extends StatelessWidget {
               ),
             ),
           ),
-          // ④ 타입 이름표 — 초록 위 대비로 판을 깔고, 긴 이름(workflow-subagent)은 알아서 줄인다.
+          // ④ 동작 이름표 — 타입(workflow-subagent)이 아니라 **지금 무슨 일을 하는지**(지시)를
+          //    _labelMaxChars 자로 잘라 건다. 타입은 동물 종·발밑 그림자색이 이미 말하고,
+          //    사람이 궁금한 건 "이 마리가 뭘 하나" 다. 전문은 탭하면 상세 로그 맨 앞에.
           //    슬롯이 지면선~셀 바닥 딱 _labelH — 여기서 내리면 셀 밖이라 Stack 이 말없이 자른다.
           if (label)
             Positioned(
@@ -2063,9 +2255,20 @@ class _SceneCritter extends StatelessWidget {
                     color: _plateBg,
                     borderRadius: BorderRadius.circular(4),
                   ),
-                  child: FittedBox(
-                    fit: BoxFit.scaleDown,
-                    child: _TypeBadge(agentType: run.agentType),
+                  child: Padding(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    child: Text(
+                      _actionLabel(run),
+                      maxLines: 1,
+                      softWrap: false, // 폭 넓은 ASCII 가 104px 셀에서 줄바꿈돼 잘리지 않게
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: b.color,
+                      ),
+                    ),
                   ),
                 ),
               ),
@@ -2081,11 +2284,10 @@ class _SceneCritter extends StatelessWidget {
 /// [title] 은 그 세션의 최신 `ai-title`(사람이 읽는 제목). 없는 세션도 있어서(실측)
 /// 그땐 예전처럼 세션ID 앞 8자로 폴백한다.
 class _SessionPlate extends StatelessWidget {
-  final String sessionId, project;
+  final String sessionId;
   final String? title;
   const _SessionPlate({
     required this.sessionId,
-    required this.project,
     required this.title,
   });
 
@@ -2100,7 +2302,7 @@ class _SessionPlate extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
         child: Text(
-          '${title ?? '세션 $shortId'} · ${_projectLabel(project)}',
+          title ?? '세션 $shortId',
           maxLines: 1,
           overflow: TextOverflow.ellipsis, // ai-title 은 열 폭보다 길 수 있다
           style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
