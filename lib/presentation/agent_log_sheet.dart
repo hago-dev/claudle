@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:isolate';
 
 import 'package:flutter/material.dart';
@@ -16,6 +17,15 @@ List<AgentStep> _readSteps(String filePath) =>
 /// 메인 세션(사람) 클릭 상세 — 서브와 달리 지시=최신 last-prompt, 활동=최근순([readMainSteps]).
 List<AgentStep> _readMainSteps(String filePath) =>
     AgentRunReader().readMainSteps(filePath);
+
+/// 상세 읽기의 아이솔레이트 스폰 — **반드시 이 톱레벨의 깨끗한 스코프에서 클로저를 만든다.**
+///
+/// Dart 는 같은 스코프의 클로저들이 캡처 Context 를 공유한다 — 폴링하는 `_read` 안에서
+/// `Isolate.run(...)` 을 만들면 이웃 `setState` 클로저가 캡처한 State(→ Timer·Element,
+/// unsendable)까지 스폰 메시지에 통째로 끌려가 "object is unsendable - _Timer" 로 터진다.
+/// `agents_screen.dart` 의 [titlesInIsolate] 와 같은 함정이고, 처방도 같다.
+Future<List<AgentStep>> _stepsInIsolate(String path, {required bool live}) =>
+    Isolate.run(() => live ? _readMainSteps(path) : _readSteps(path));
 
 /// 카드의 아이콘 줄로는 "Read 를 12번 했다" 까지고, **뭘** 읽었는지는 여기서 본다.
 class AgentLogSheet extends StatefulWidget {
@@ -46,15 +56,74 @@ class AgentLogSheet extends StatefulWidget {
 }
 
 class _AgentLogSheetState extends State<AgentLogSheet> {
-  late final Future<List<AgentStep>> _steps;
+  /// 폴링 주기 — 숲 씬과 같게. 시트를 열어둔 채로 새 도구가 올라오는 게 이 화면의 요지고,
+  /// 파일 하나만 다시 읽으므로(실측 수십 ms) 이 간격이면 싸다.
+  static const _poll = Duration(seconds: 2);
+
+  /// 바닥에서 이 안쪽이면 "따라가는 중" 으로 본다 — 새 줄이 붙으면 같이 내려간다.
+  /// 위로 올려 읽는 중이면 건드리지 않는다(읽던 자리가 튀는 게 제일 짜증난다).
+  static const _followSlack = 40.0;
+
+  List<AgentStep>? _steps; // null = 첫 읽기 전(로딩)
+  Object? _error;
+  Timer? _timer;
+  bool _busy = false; // 앞 읽기가 아직 → 겹치지 않게
+  final _scroll = ScrollController();
 
   @override
   void initState() {
     super.initState();
-    // 경로만 아이솔레이트로 넘긴다 — 클로저가 State 를 잡으면 넘어가지 못한다.
-    final path = widget.run.filePath;
-    final live = widget.live;
-    _steps = Isolate.run(() => live ? _readMainSteps(path) : _readSteps(path));
+    _read();
+    // 끝난 마리의 파일은 더 자라지 않는다 → 폴링할 이유가 없다. 도는 동안만 따라간다.
+    if (widget.run.isRunning) _timer = Timer.periodic(_poll, (_) => _read());
+  }
+
+  /// 파일을 통째로 다시 읽는다. 증분 파싱이 아닌 이유: 리더가 이미 파일 단위라 그 결을
+  /// 따르고, 실패해도(읽는 사이 쓰이는 중 등) 조용히 다음 틱에 낫는다 — 이미 그린 로그를
+  /// 에러 화면으로 날리지 않는다(첫 읽기만 예외: 보여줄 게 없으니 에러를 낸다).
+  Future<void> _read() async {
+    if (_busy) return;
+    _busy = true;
+    try {
+      // 스폰은 [_stepsInIsolate] 에서 — 여기서 클로저를 만들면 아래 setState 가 캡처한
+      // State 가 끌려가 스폰이 터진다(경로·플래그만 값으로 넘긴다).
+      final steps = await _stepsInIsolate(widget.run.filePath, live: widget.live);
+      if (!mounted) return; // 시트를 닫았다 — 죽은 State 에 setState 금지
+      final follow = _atBottom; // 갈아 끼우기 **전에** 본다(뒤에 보면 이미 늘어난 높이다)
+      setState(() {
+        _steps = steps;
+        _error = null;
+      });
+      if (follow) _stickToBottom();
+    } catch (e) {
+      if (!mounted) return;
+      if (_steps == null) setState(() => _error = e); // 첫 읽기 실패만 화면에
+    } finally {
+      _busy = false;
+    }
+  }
+
+  /// 지금 바닥을 보고 있나 — 아직 안 붙었거나(첫 프레임) 바닥 근처면 따라간다.
+  bool get _atBottom {
+    if (!_scroll.hasClients) return true;
+    final p = _scroll.position;
+    return p.maxScrollExtent - p.pixels <= _followSlack;
+  }
+
+  /// 새 줄이 붙은 만큼 바닥으로. 레이아웃이 끝나야 maxScrollExtent 가 새 높이라
+  /// 다음 프레임에 민다(지금 밀면 늘기 전 바닥이다).
+  void _stickToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scroll.hasClients) return;
+      _scroll.jumpTo(_scroll.position.maxScrollExtent);
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel(); // 닫히면 폴링도 멈춘다
+    _scroll.dispose();
+    super.dispose();
   }
 
   @override
@@ -126,43 +195,42 @@ class _AgentLogSheetState extends State<AgentLogSheet> {
             ),
           ),
           const Divider(height: 1),
-          Expanded(
-            child: FutureBuilder<List<AgentStep>>(
-              future: _steps,
-              builder: (context, snap) {
-                if (snap.hasError) {
-                  return Center(
-                    child: Text('로그 읽기 실패: ${snap.error}',
-                        style: const TextStyle(fontSize: 12)),
-                  );
-                }
-                final steps = snap.data;
-                if (steps == null) {
-                  return const Center(
-                    child: SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    ),
-                  );
-                }
-                if (steps.isEmpty) {
-                  return const Center(
-                    child: Text('남긴 기록이 없습니다.', style: TextStyle(fontSize: 12)),
-                  );
-                }
-                // 한 마리가 수백 줄까지 간다 → 보이는 것만 만든다.
-                return ListView.builder(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-                  itemCount: steps.length,
-                  itemBuilder: (context, i) =>
-                      _StepRow(step: steps[i], color: color),
-                );
-              },
-            ),
-          ),
+          Expanded(child: _log(color)),
         ],
       ),
+    );
+  }
+
+  /// 로그 본문 — 첫 읽기 전엔 스피너, 그 뒤론 [_read] 가 갈아 끼우는 목록.
+  /// 폴링 실패는 여기 안 온다([_read] 가 이미 그린 것을 지키고 다음 틱에 낫는다).
+  Widget _log(Color color) {
+    final error = _error;
+    if (error != null) {
+      return Center(
+        child: Text('로그 읽기 실패: $error', style: const TextStyle(fontSize: 12)),
+      );
+    }
+    final steps = _steps;
+    if (steps == null) {
+      return const Center(
+        child: SizedBox(
+          width: 20,
+          height: 20,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        ),
+      );
+    }
+    if (steps.isEmpty) {
+      return const Center(
+        child: Text('남긴 기록이 없습니다.', style: TextStyle(fontSize: 12)),
+      );
+    }
+    // 한 마리가 수백 줄까지 간다 → 보이는 것만 만든다.
+    return ListView.builder(
+      controller: _scroll,
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+      itemCount: steps.length,
+      itemBuilder: (context, i) => _StepRow(step: steps[i], color: color),
     );
   }
 }
