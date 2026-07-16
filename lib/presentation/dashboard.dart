@@ -6,6 +6,7 @@ import '../application/app_controller.dart';
 import '../core/db/usage_database.dart';
 import '../core/util/format.dart';
 import '../domain/models/subscription_limits.dart';
+import 'agents_screen.dart';
 
 /// 상세 대시보드 창: 오늘/전체 요약 + 일별 막대 + 모델/프로젝트 순위.
 ///
@@ -20,6 +21,13 @@ class DashboardScreen extends StatelessWidget {
       appBar: AppBar(
         title: const Text('Claudle 🐩'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.pets, size: 18),
+            tooltip: '에이전트들 보기',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const AgentsScreen()),
+            ),
+          ),
           ValueListenableBuilder<String>(
             valueListenable: controller.status,
             builder: (_, s, _) => Padding(
@@ -73,6 +81,16 @@ class WindowsHudScreen extends StatelessWidget {
                       style:
                           TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
                   const Spacer(),
+                  IconButton(
+                    icon: const Icon(Icons.pets, size: 16),
+                    tooltip: '에이전트들 보기',
+                    padding: EdgeInsets.zero,
+                    constraints:
+                        const BoxConstraints.tightFor(width: 30, height: 30),
+                    onPressed: () => Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => const AgentsScreen()),
+                    ),
+                  ),
                   IconButton(
                     icon: const Icon(Icons.remove, size: 16),
                     tooltip: '트레이로 숨기기',

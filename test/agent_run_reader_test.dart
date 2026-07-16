@@ -1,0 +1,344 @@
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
+import 'package:tokenbar/data/providers/claude_code/agent_run_reader.dart';
+import 'package:tokenbar/data/providers/claude_code/claude_path_resolver.dart';
+import 'package:tokenbar/domain/models/agent_run.dart';
+
+/// 실측 구조(agent-*.jsonl 1줄 = 1 레코드)를 최소로 재현하는 픽스처 헬퍼.
+String _userLine(String agentId, String prompt, String ts) => json.encode({
+      'parentUuid': null,
+      'isSidechain': true,
+      'agentId': agentId,
+      'type': 'user',
+      'uuid': 'u1',
+      'timestamp': ts,
+      'sessionId': 'sess-1',
+      'message': {'role': 'user', 'content': prompt},
+    });
+
+String _assistantLine(
+  String agentId,
+  List<(String, Map<String, Object?>)> tools,
+  String ts, {
+  int input = 0,
+  int output = 0,
+  String text = 'ok',
+}) =>
+    json.encode({
+      'isSidechain': true,
+      'agentId': agentId,
+      'type': 'assistant',
+      'uuid': 'a1',
+      'timestamp': ts,
+      'sessionId': 'sess-1',
+      'message': {
+        'role': 'assistant',
+        'content': [
+          {'type': 'thinking', 'thinking': '...'},
+          {'type': 'text', 'text': text},
+          for (final (name, args) in tools)
+            {'type': 'tool_use', 'name': name, 'input': args},
+        ],
+        'usage': {
+          'input_tokens': input,
+          'output_tokens': output,
+          'cache_read_input_tokens': 999, // 모델에 없는 필드 → 무시돼야 함
+        },
+      },
+    });
+
+/// 워크플로우 팬아웃 실측 구조 — 프롬프트 앞부분(실측 1869자)이 통째로 공유된다.
+const _shared = '저장소: /Users/me/proj (NestJS 11 + Drizzle).\n'
+    '변경 내용을 보려면: `git diff`.\n\n## 리뷰 지적 (카테고리: ';
+
+void main() {
+  late Directory tmp;
+  late String subagents;
+
+  void write(String path, String content) {
+    final f = File(path);
+    f.parent.createSync(recursive: true);
+    f.writeAsStringSync(content);
+  }
+
+  setUp(() {
+    tmp = Directory.systemTemp.createTempSync('agent_run_reader_test');
+    final session = p.join(tmp.path, 'projects', '-Users-me-proj', 'sess-1');
+    subagents = p.join(session, 'subagents');
+
+    // 일반 서브에이전트(meta 있음).
+    write(p.join(subagents, 'agent-aaa.jsonl'), [
+      _userLine('aaa', 'a' * 150, '2026-07-02T06:56:55.666Z'),
+      _assistantLine(
+        'aaa',
+        [
+          ('Bash', {'command': 'find /Users/me/proj -name "*Goods*"'}),
+          ('Read', {'file_path': '/Users/me/proj/lib/single/create.dart'}),
+        ],
+        '2026-07-02T06:57:10.000Z',
+        input: 100,
+        output: 20,
+      ),
+      _assistantLine('aaa', [
+        ('Bash', {'command': 'ls'}),
+      ], '2026-07-02T06:59:02.413Z', input: 5, output: 3),
+    ].join('\n'));
+    write(p.join(subagents, 'agent-aaa.meta.json'),
+        '{"agentType":"delegate","spawnDepth":1}');
+
+    // 워크플로우 서브에이전트(중첩 경로).
+    final wf = p.join(subagents, 'workflows', 'wf_1752_abc');
+    write(p.join(wf, 'agent-bbb.jsonl'),
+        _userLine('bbb', '워크플로우 지시', '2026-07-02T07:00:00.000Z'));
+    write(p.join(wf, 'agent-bbb.meta.json'),
+        '{"agentType":"workflow-subagent"}');
+
+    // meta.json 없음 → 'unknown' 폴백.
+    write(p.join(subagents, 'agent-ccc.jsonl'),
+        _userLine('ccc', 'meta 없는 에이전트', '2026-07-02T07:01:00.000Z'));
+
+    // 일반 세션 JSONL(에이전트 아님) → 무시돼야 함.
+    write(p.join(session, '..', 'sess-1.jsonl'),
+        json.encode({'type': 'assistant', 'message': {'usage': {}}}));
+  });
+
+  tearDown(() => tmp.deleteSync(recursive: true));
+
+  AgentRunReader reader({DateTime? now}) => AgentRunReader(
+        resolver: ClaudePathResolver(env: {'CLAUDE_CONFIG_DIR': tmp.path}),
+        now: () => now ?? DateTime.utc(2026, 7, 3),
+      );
+
+  AgentRun byId(List<AgentRun> runs, String id) =>
+      runs.firstWhere((r) => r.agentId == id);
+
+  /// 워크플로우 하나에 프롬프트가 [prompts] 인 에이전트들을 깔고, 설명만 뽑는다.
+  List<String> fanOut(String workflowId, List<String> prompts,
+      {Map<int, String> metaDescriptions = const {}}) {
+    final dir = p.join(subagents, 'workflows', workflowId);
+    for (var i = 0; i < prompts.length; i++) {
+      write(p.join(dir, 'agent-$workflowId$i.jsonl'),
+          _userLine('$workflowId$i', prompts[i], '2026-07-02T09:0$i:00.000Z'));
+      write(
+        p.join(dir, 'agent-$workflowId$i.meta.json'),
+        json.encode({
+          'agentType': 'workflow-subagent',
+          'description': ?metaDescriptions[i],
+        }),
+      );
+    }
+    final runs = reader()
+        .readAll()
+        .where((r) => r.workflowId == workflowId)
+        .toList()
+      ..sort((a, b) => a.startedAt.compareTo(b.startedAt));
+    return runs.map((r) => r.description).toList();
+  }
+
+  test('agent-*.jsonl 만 읽고 일반 세션 파일은 무시한다', () {
+    final runs = reader().readAll();
+    expect(runs.map((r) => r.agentId).toSet(), {'aaa', 'bbb', 'ccc'});
+  });
+
+  test('일반 서브에이전트: 경로·meta·프롬프트·도구·토큰·시각 파싱', () {
+    final r = byId(reader().readAll(), 'aaa');
+    expect(r.agentType, 'delegate');
+    expect(r.project, '-Users-me-proj');
+    expect(r.sessionId, 'sess-1');
+    expect(r.workflowId, isNull);
+    expect(r.filePath, endsWith('agent-aaa.jsonl'));
+    expect(r.description, 'a' * 100); // 첫 프롬프트 앞 100자
+    expect(r.toolCalls.map((t) => t.name), ['Bash', 'Read', 'Bash']); // 순서 유지
+    expect(r.inputTokens, 105);
+    expect(r.outputTokens, 23);
+    expect(r.startedAt, DateTime.utc(2026, 7, 2, 6, 56, 55, 666));
+    expect(r.endedAt, DateTime.utc(2026, 7, 2, 6, 59, 2, 413));
+    expect(r.isRunning, isFalse);
+  });
+
+  test('도구 호출은 이름만이 아니라 무엇을 만졌는지(input)까지 담는다', () {
+    final r = byId(reader().readAll(), 'aaa');
+    expect(r.toolCalls[0].detail, 'find /Users/me/proj -name "*Goods*"');
+    expect(r.toolCalls[1].detail, 'single/create.dart'); // 경로는 마지막 2 세그먼트
+    expect(r.toolCalls[2].detail, 'ls');
+  });
+
+  test('도구 인자: file_path > command > pattern > description > url 순, 없으면 빈 값', () {
+    write(p.join(subagents, 'agent-eee.jsonl'), [
+      _userLine('eee', '지시', '2026-07-02T10:00:00.000Z'),
+      _assistantLine('eee', [
+        ('Grep', {'pattern': 'SessionAuthGuard', 'output_mode': 'files'}),
+        ('WebFetch', {'url': 'https://example.com/docs'}),
+        ('Task', {'description': '탐색', 'subagent_type': 'Explore'}),
+        ('Read', {'file_path': '/a/b/c/d.dart', 'command': '무시돼야 함'}),
+        ('TodoWrite', {'todos': []}), // 뽑을 인자 없음
+        ('Bash', {'command': 'echo hi\n  && ls -al'}), // 여러 줄 → 한 줄로
+      ], '2026-07-02T10:00:05.000Z'),
+    ].join('\n'));
+    final tools = byId(reader().readAll(), 'eee').toolCalls;
+    expect(tools.map((t) => t.detail), [
+      'SessionAuthGuard',
+      'https://example.com/docs',
+      '탐색',
+      'c/d.dart',
+      '',
+      'echo hi && ls -al',
+    ]);
+  });
+
+  test('워크플로우 서브에이전트: workflowId 추출', () {
+    final r = byId(reader().readAll(), 'bbb');
+    expect(r.workflowId, 'wf_1752_abc');
+    expect(r.agentType, 'workflow-subagent');
+    expect(r.sessionId, 'sess-1');
+    expect(r.description, '워크플로우 지시');
+  });
+
+  test('meta.json 없으면 agentType 은 unknown (크래시 금지)', () {
+    final r = byId(reader().readAll(), 'ccc');
+    expect(r.agentType, 'unknown');
+    expect(r.toolCalls, isEmpty);
+    expect(r.inputTokens, 0);
+  });
+
+  test('isRunning: 마지막 타임스탬프가 60초 이내면 true', () {
+    final justAfter =
+        DateTime.utc(2026, 7, 2, 6, 59, 2, 413).add(const Duration(seconds: 30));
+    expect(byId(reader(now: justAfter).readAll(), 'aaa').isRunning, isTrue);
+
+    final wellAfter =
+        DateTime.utc(2026, 7, 2, 6, 59, 2, 413).add(const Duration(seconds: 90));
+    expect(byId(reader(now: wellAfter).readAll(), 'aaa').isRunning, isFalse);
+  });
+
+  test('깨진 라인은 건너뛰고 나머지를 살린다', () {
+    write(p.join(subagents, 'agent-ddd.jsonl'), [
+      _userLine('ddd', '정상 프롬프트', '2026-07-02T08:00:00.000Z'),
+      '{"type":"assistant", 부분적으로 깨진',
+      _assistantLine('ddd', [
+        ('Grep', {'pattern': 'x'}),
+      ], '2026-07-02T08:00:05.000Z', output: 7),
+    ].join('\n'));
+    final r = byId(reader().readAll(), 'ddd');
+    expect(r.description, '정상 프롬프트');
+    expect(r.toolCalls.single.name, 'Grep');
+    expect(r.outputTokens, 7);
+  });
+
+  // ── 설명 중복 (사용자 신고: "설명이 전부 똑같아 구분이 안 된다") ──
+
+  test('팬아웃: 공유 접두사를 걷어내 서로 다른 부분부터 보여준다', () {
+    final descriptions = fanOut('wffan', [
+      '$_shared auth-bypass)\n제목: 헤더 신원을 그대로 신뢰한다',
+      '$_shared session-lifecycle)\n제목: logout 쿠키 domain 누락',
+      '$_shared deletion)\n제목: 삭제된 계약에 묶여 7/8 실패',
+    ]);
+    expect(descriptions.toSet(), hasLength(3)); // 전부 달라야 한다
+    expect(descriptions[0], startsWith('auth-bypass)'));
+    expect(descriptions[1], startsWith('session-lifecycle)'));
+    expect(descriptions[2], startsWith('deletion)'));
+    // 공유분(앞 100자를 죄다 잡아먹던 부분)은 사라진다.
+    expect(descriptions.every((d) => !d.contains('저장소:')), isTrue);
+  });
+
+  test('팬아웃: 접두사를 단어 중간에서 자르지 않는다', () {
+    final descriptions = fanOut('wfword', [
+      '$_shared auth-bypass)\n제목: 첫째',
+      '$_shared auth-zzz)\n제목: 둘째',
+    ]);
+    // 공통분은 'auth-' 까지지만 되감아서 단어 통째로 보여준다("bypass)…" 가 아니라).
+    expect(descriptions[0], startsWith('auth-bypass)'));
+    expect(descriptions[1], startsWith('auth-zzz)'));
+  });
+
+  test('meta.json 의 description 이 있으면 프롬프트보다 우선', () {
+    final descriptions = fanOut(
+      'wfmeta',
+      ['$_shared auth-bypass)\n제목: 첫째', '$_shared deletion)\n제목: 둘째'],
+      metaDescriptions: {0: 'Explore existing integrations and secrets'},
+    );
+    expect(descriptions[0], 'Explore existing integrations and secrets');
+    expect(descriptions[1], startsWith('deletion)')); // 라벨 없는 쪽은 프롬프트에서
+  });
+
+  test('프롬프트가 아예 같으면 최후로 인덱스를 붙여 구분한다', () {
+    final descriptions = fanOut('wfsame', ['$_shared 같은 지시', '$_shared 같은 지시']);
+    expect(descriptions.toSet(), hasLength(2));
+    expect(descriptions[0], endsWith(' (1/2)'));
+    expect(descriptions[1], endsWith(' (2/2)'));
+    expect(descriptions[0], contains('같은 지시')); // 내용은 남는다
+  });
+
+  test('설명은 한 줄로 접힌다(개행·연속 공백 제거)', () {
+    write(p.join(subagents, 'agent-fff.jsonl'),
+        _userLine('fff', '\n\n첫 줄\n\n  둘째 줄  ', '2026-07-02T11:00:00.000Z'));
+    expect(byId(reader().readAll(), 'fff').description, '첫 줄 둘째 줄');
+  });
+
+  // ── 상세 로그(lazy) ──
+
+  test('readSteps: 도구 호출과 에이전트가 쓴 글을 순서대로', () {
+    final r = byId(reader().readAll(), 'aaa');
+    final steps = reader().readSteps(r.filePath);
+    expect(steps.map((s) => s.tool?.name ?? '텍스트:${s.text}'), [
+      '텍스트:ok',
+      'Bash',
+      'Read',
+      '텍스트:ok',
+      'Bash',
+    ]);
+    expect(steps[2].tool!.detail, 'single/create.dart');
+    expect(steps[0].tool, isNull);
+  });
+
+  test('readSteps: 빈 텍스트 블록은 버린다', () {
+    write(p.join(subagents, 'agent-ggg.jsonl'), [
+      _userLine('ggg', '지시', '2026-07-02T12:00:00.000Z'),
+      _assistantLine('ggg', [
+        ('Read', {'file_path': '/x/y.dart'}),
+      ], '2026-07-02T12:00:01.000Z', text: '   '),
+    ].join('\n'));
+    final r = byId(reader().readAll(), 'ggg');
+    expect(reader().readSteps(r.filePath).map((s) => s.tool?.name), ['Read']);
+  });
+
+  // ── 라이브 폴링(readLive): 파일 mtime 이 최근인 것만 ──
+
+  test('readLive: mtime 이 오래된 파일은 건너뛰고 방금 쓰인 것만 읽는다', () {
+    final now = DateTime.now().toUtc();
+    // 방금 쓰인 파일(= 도는 중). write() 는 mtime 을 실제 지금으로 남긴다.
+    write(p.join(subagents, 'agent-fresh.jsonl'),
+        _userLine('fresh', '지금 도는 중', now.toIso8601String()));
+    write(p.join(subagents, 'agent-fresh.meta.json'), '{"agentType":"delegate"}');
+    // 오래 전 파일(= 안 도는 것): mtime 을 10분 전으로 되돌린다.
+    final stalePath = p.join(subagents, 'agent-stale.jsonl');
+    write(stalePath, _userLine('stale', '오래 전', now.toIso8601String()));
+    write(p.join(subagents, 'agent-stale.meta.json'), '{"agentType":"delegate"}');
+    File(stalePath).setLastModifiedSync(now.subtract(const Duration(minutes: 10)));
+
+    final ids =
+        reader(now: now).readLive().map((r) => r.agentId).toSet();
+    expect(ids, contains('fresh'));
+    expect(ids, isNot(contains('stale'))); // mtime 창(90초) 밖 → 파싱 생략
+  });
+
+  test('readLive: 판정 창(90초) 경계 안쪽은 포함, 바깥은 제외', () {
+    final now = DateTime.now().toUtc();
+    void put(String id, Duration ago) {
+      final path = p.join(subagents, 'agent-$id.jsonl');
+      write(path, _userLine(id, id, now.toIso8601String()));
+      write(p.join(subagents, 'agent-$id.meta.json'), '{"agentType":"delegate"}');
+      File(path).setLastModifiedSync(now.subtract(ago));
+    }
+
+    put('inside', const Duration(seconds: 30)); // 창 안
+    put('outside', const Duration(seconds: 120)); // 창 밖
+
+    final ids = reader(now: now).readLive().map((r) => r.agentId).toSet();
+    expect(ids, contains('inside'));
+    expect(ids, isNot(contains('outside')));
+  });
+}
