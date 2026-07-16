@@ -23,6 +23,11 @@ List<AgentRun> _readLiveRuns() => AgentRunReader().readLive();
 List<AgentStep> _readSteps(String filePath) =>
     AgentRunReader().readSteps(filePath);
 
+/// 그룹 제목 진입점 — 그룹 확정 뒤 대표 1건씩만 넘긴다(실측 134개). 세션 파일이 커서
+/// 실측 ~0.95초 — UI 스레드에서 부르면 그동안 프레임이 통째로 멈춘다.
+Map<String, String> _readTitles(List<AgentRun> representatives) =>
+    AgentRunReader().readTitles(representatives);
+
 /// 에이전트 시각화 화면 — 서브에이전트 1개 = 캐릭터 1마리.
 ///
 /// [라이브] 지금 도는 에이전트 / [기록] 지난 실행을 세션·워크플로우 단위로 재생.
@@ -124,9 +129,16 @@ class _AgentsScreenState extends State<AgentsScreen>
     try {
       final runs = await Isolate.run(_readAllRuns);
       if (!mounted) return;
+      final groups = _groupRuns(runs);
+      // 제목은 그룹을 확정한 **뒤에** — 제목 파일은 그룹마다 하나뿐이라 readAll 이 읽은
+      // 1400 파일을 다시 읽을 일이 아니다. 대표 1건씩만 아이솔레이트로 넘긴다(클로저가
+      // State 를 잡으면 넘어가지 못하므로 목록을 미리 만들어 둔다).
+      final reps = [for (final g in groups) g.runs.first];
+      final titles = await Isolate.run(() => _readTitles(reps));
+      if (!mounted) return;
       setState(() {
         _runs = runs;
-        _groups = _groupRuns(runs);
+        _groups = [for (final g in groups) g.withName(titles[g.key])];
       });
     } catch (e) {
       if (!mounted) return;
@@ -201,8 +213,17 @@ class _AgentsScreenState extends State<AgentsScreen>
     final style = Theme.of(context).textTheme.bodySmall;
     if (_live) {
       if (_liveRuns == null) return const SizedBox.shrink();
-      final n = _liveRuns!.where((r) => r.isRunning).length;
-      return Text('실행 중 $n마리', style: style);
+      // 화면에 보이는 것과 숫자가 맞아야 한다 — 사람(세션)과 동물(서브)은 세는 단위가 다르다.
+      // 세션은 **sessionId 집합**으로 센다: 씬의 열(=사람)은 메인이 돌 때뿐 아니라 그 세션의
+      // 동물이 있을 때도 서기 때문에(메인이 서브를 기다리는 동안 메인 파일은 안 쓰인다),
+      // '도는 메인' 만 세면 사람이 서 있는데 "세션 0개" 가 된다.
+      final live = _liveRuns!.where((r) => r.isRunning);
+      final sessions = live.map((r) => r.sessionId).toSet().length;
+      final beasts = live.where((r) => r.agentType != mainAgentType).length;
+      return Text(
+        beasts == 0 ? '세션 $sessions개' : '세션 $sessions개 · 에이전트 $beasts마리',
+        style: style,
+      );
     }
     if (_runs == null) return const SizedBox.shrink();
     return Text('${_groups.length}개 실행 · 에이전트 ${_runs!.length}마리',
@@ -247,6 +268,9 @@ class _AgentsScreenState extends State<AgentsScreen>
 /// 지금 도는 에이전트만 — 세션(부모)=사람은 빈터 위에 서 있고, 그 세션이 띄운 서브(동물)들이
 /// 앞마당에서 논다([_ForestSceneView]). 상위(_AgentsScreenState)가 이 탭이 열려 보이는
 /// 동안에만 가벼운 mtime 스캔(readLive)으로 주기 갱신하고, 탭을 벗어나거나 창을 닫으면 멈춘다.
+///
+/// [runs] 엔 메인 세션(사람)도 섞여 온다 → 서브가 0마리여도(= 프롬프트만 도는 중) 씬이
+/// 뜬다. 빈 화면은 이제 **메인도 서브도 없을 때**뿐이다.
 class _LiveView extends StatelessWidget {
   final List<AgentRun> runs;
   final VoidCallback onShowHistory;
@@ -1044,18 +1068,28 @@ class _RunGroup {
   final DateTime startedAt;
   final DateTime endedAt;
 
-  _RunGroup(this.key, this.isWorkflow, this.runs)
+  /// 사람이 읽는 제목 — 워크플로우 `workflowName` / 세션 최신 `ai-title`.
+  /// null = 못 찾음 → [title] 이 예전처럼 ID 로 폴백한다.
+  final String? name;
+
+  _RunGroup(this.key, this.isWorkflow, this.runs, {this.name})
       : startedAt = runs.first.startedAt,
         endedAt = runs
             .map((r) => r.endedAt)
             .reduce((a, b) => a.isAfter(b) ? a : b);
 
+  /// 제목만 채운 사본 — 제목은 그룹이 정해진 뒤에야 그 파일을 읽을 수 있어서([_load])
+  /// [AgentRun.withDescription] 과 같은 순서 문제를 같은 방식으로 푼다.
+  _RunGroup withName(String? name) => _RunGroup(key, isWorkflow, runs, name: name);
+
   Duration get span => endedAt.difference(startedAt);
   int get tokens =>
       runs.fold(0, (s, r) => s + r.inputTokens + r.outputTokens);
-  String get title => isWorkflow
-      ? '워크플로우 $key'
-      : '세션 ${key.length > 8 ? key.substring(0, 8) : key}';
+  String get title =>
+      name ??
+      (isWorkflow
+          ? '워크플로우 $key'
+          : '세션 ${key.length > 8 ? key.substring(0, 8) : key}');
 }
 
 /// workflowId(있으면) / sessionId 로 묶고 최근 끝난 것부터.
@@ -1327,6 +1361,12 @@ class _ForestScene extends ChangeNotifier {
   final _byId = <String, _Clearing>{}; // sessionId → 빈터
   final _rnd = math.Random(); // 움직임은 결정론이 아니다 — 정체성(동물·색·사람)만 해시로 고정한다
   Map<String, String> _projectOf = const {}; // sessionId → project
+  Map<String, AgentRun> _mainOf = const {}; // sessionId → 지금 도는 메인(사람이 하는 일)
+
+  /// sessionId → 최신 ai-title. **붙잡아 둔다** — 메인 세션 파일은 서브가 도는 동안 안 쓰여서
+  /// mtime 창을 들락거린다. 매번 [_mainOf] 에서 읽으면 이름표가 제목 ↔ 세션ID 로 깜빡인다.
+  final _titleOf = <String, String>{};
+
   List<String> _sessions = const [];
   Size _size = Size.zero;
   Duration _last = Duration.zero;
@@ -1342,6 +1382,13 @@ class _ForestScene extends ChangeNotifier {
   /// 이 마리가 노는 빈터 — 뷰가 원근 스케일(깊이)을 계산할 때 쓴다.
   _Clearing? clearingOf(String sessionId) => _byId[sessionId];
 
+  /// 이 세션의 메인이 지금 도는 중이면 그 실행 — 사람 머리 위 도구 칩의 재료.
+  /// null = 사람은 서 있지만 조용하다(서브만 돌거나, 메인이 60초 넘게 아무것도 안 썼다).
+  AgentRun? mainOf(String sessionId) => _mainOf[sessionId];
+
+  /// 이 세션의 사람이 읽는 제목(최신 ai-title). null = 아직 한 번도 못 봤다 → 세션ID 폴백.
+  String? titleOf(String sessionId) => _titleOf[sessionId];
+
   /// 창 크기 변화 — [LayoutBuilder] 안에서 부른다. **notify 금지**.
   void resize(Size s) {
     if (s == _size) return;
@@ -1351,8 +1398,24 @@ class _ForestScene extends ChangeNotifier {
 
   /// 폴링 결과를 맞춘다 — 위치·기분은 그대로 두고 목록만. **notify 금지**.
   void sync(List<AgentRun> runs) {
+    // 메인 세션은 사람이라 동물로 만들지 않는다(agentAnimal 해시를 타면 안 된다) —
+    // 서브와 갈리는 지점은 씬 전체에서 여기 하나뿐이고, 아래는 전부 서브(동물) 얘기다.
+    final mains = <String, AgentRun>{};
+    final subs = <AgentRun>[];
+    for (final r in runs) {
+      if (r.agentType == mainAgentType) {
+        mains[r.sessionId] = r;
+      } else {
+        subs.add(r);
+      }
+    }
+    _mainOf = mains;
+    for (final r in mains.values) {
+      if (r.description.isNotEmpty) _titleOf[r.sessionId] = r.description;
+    }
+
     // 48 상한. startedAt 오름차순 = 폴링마다 집합이 안 흔들리는 안정 기준.
-    final shown = runs.toList()..sort((a, b) => a.startedAt.compareTo(b.startedAt));
+    final shown = subs..sort((a, b) => a.startedAt.compareTo(b.startedAt));
     hidden = math.max(0, shown.length - _beastMax);
     if (hidden > 0) shown.removeRange(_beastMax, shown.length);
 
@@ -1383,15 +1446,21 @@ class _ForestScene extends ChangeNotifier {
       if (!live.contains(b.agentId)) b.leaving = true;
     }
 
-    // 열 = 지금 **마리가 있는** 세션. 사라지는 중(leaving)인 마리도 제 빈터에서 마저
-    // 페이드해야 해서 runs 가 아니라 _beasts 에서 뽑는다 — 이 덕에 "모든 마리는 제 빈터를
-    // 갖는다" 가 불변식이 된다(마지막 한 마리가 빠진 열은 다음 폴링에 접힌다).
+    // 열 = 지금 **마리가 있는** 세션 ∪ **메인이 도는** 세션. 사라지는 중(leaving)인 마리도
+    // 제 빈터에서 마저 페이드해야 해서 runs 가 아니라 _beasts 에서 뽑는다 — 이 덕에 "모든 마리는
+    // 제 빈터를 갖는다" 가 불변식이 된다(마지막 한 마리가 빠진 열은 다음 폴링에 접힌다).
+    // 메인을 더하는 게 요구의 핵심이다: 서브 없이 프롬프트만 돌아도(= 동물 0마리) 열이 서고
+    // 사람이 캠프에 선다.
     final projects = <String, String>{};
     for (final b in _beasts.values) {
       projects.putIfAbsent(b.sessionId, () => b.run.project);
     }
+    for (final r in mains.values) {
+      projects.putIfAbsent(r.sessionId, () => r.project);
+    }
     final sessions = projects.keys.toList()..sort(); // readLive 는 mtime 순 → 정렬 안 하면 2초마다 사람이 자리를 바꾼다
     _projectOf = projects;
+    _titleOf.removeWhere((sid, _) => !projects.containsKey(sid)); // 열이 접히면 제목도 버린다
     // 열 구성이 그대로면(대개 그렇다) 열·소품을 다시 계산하지 않는다 — 2초마다 숲이 춤추지 않게.
     // 이미 깔린 것(_byId)과 비교하므로 크기가 0이라 걸러진 레이아웃도 다음 기회에 스스로 낫는다.
     if (sessions.length == _byId.length && sessions.every(_byId.containsKey)) {
@@ -1705,7 +1774,13 @@ class _ForestSceneState extends State<_ForestSceneView>
     return Stack(
       children: [
         for (int i = 0; i < _scene.clearings.length; i++)
-          _PersonStand(c: _scene.clearings[i], clock: _scene.clock, index: i),
+          _PersonStand(
+            c: _scene.clearings[i],
+            clock: _scene.clock,
+            index: i,
+            main: _scene.mainOf(_scene.clearings[i].sessionId),
+            title: _scene.titleOf(_scene.clearings[i].sessionId),
+          ),
         for (final b in ws) _cell(b, label),
         if (_scene.hidden > 0)
           Positioned(
@@ -1812,11 +1887,22 @@ class _Backdrop extends StatelessWidget {
 }
 
 /// 사람 1명 — 제 빈터 **위**에 고정. 동물은 빈터 안에서만 노니까 사람도 이름표도 안 가린다.
+///
+/// [main] 이 있으면 = 메인 세션이 지금 일하는 중 → 이름표 옆에 지금 만지는 도구 칩을 단다
+/// (동물 머리 위 칩과 같은 기호). 동물이 0마리여도 이 사람은 선다.
 class _PersonStand extends StatelessWidget {
   final _Clearing c;
   final double clock;
   final int index;
-  const _PersonStand({required this.c, required this.clock, required this.index});
+  final AgentRun? main;
+  final String? title;
+  const _PersonStand({
+    required this.c,
+    required this.clock,
+    required this.index,
+    required this.main,
+    required this.title,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1824,6 +1910,7 @@ class _PersonStand extends StatelessWidget {
     // 여럿이 한 박자로 들썩이는 걸 막는다.
     final breathe = math.sin(clock * 0.9 + index * 1.7) * 1.5;
     final spriteTop = _groundY - _footInset(c.sprite) * _personSize;
+    final tool = (main == null || main!.toolCalls.isEmpty) ? null : main!.toolCalls.last;
     return Positioned(
       left: c.play.left, // 열 폭 = 이름표가 잘리지 않을 만큼 넓다(personFeet 가 그 중앙)
       top: c.personFeet.dy - _groundY,
@@ -1848,8 +1935,25 @@ class _PersonStand extends StatelessWidget {
             left: 0,
             right: 0,
             bottom: _cellH - spriteTop + 2, // 스프라이트 박스 바로 위(숨쉬어도 이름표는 안 흔들리게)
+            // 칩은 이름표와 한 줄 — 이름표가 이미 머리 위다. 따로 한 줄을 더 얹으면 열 머리가
+            // 씬 밖으로 나가 잘린다(사람 셀 top = feetY-_groundY 라 짧은 창에선 음수).
             child: Center(
-              child: _SessionPlate(sessionId: c.sessionId, project: c.project),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (tool != null) ...[
+                    _ToolChip(tool: tool, color: agentColor(mainAgentType)),
+                    const SizedBox(width: 4),
+                  ],
+                  Flexible(
+                    child: _SessionPlate(
+                      sessionId: c.sessionId,
+                      project: c.project,
+                      title: title,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ],
@@ -1972,10 +2076,18 @@ class _SceneCritter extends StatelessWidget {
   }
 }
 
-/// 사람 이름표 — 이 서브들을 스폰한 메인(부모)이 누구/어디인지.
+/// 사람 이름표 — 이 메인(부모)이 무슨 일을 하는지/어디서인지.
+///
+/// [title] 은 그 세션의 최신 `ai-title`(사람이 읽는 제목). 없는 세션도 있어서(실측)
+/// 그땐 예전처럼 세션ID 앞 8자로 폴백한다.
 class _SessionPlate extends StatelessWidget {
   final String sessionId, project;
-  const _SessionPlate({required this.sessionId, required this.project});
+  final String? title;
+  const _SessionPlate({
+    required this.sessionId,
+    required this.project,
+    required this.title,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1988,7 +2100,9 @@ class _SessionPlate extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
         child: Text(
-          '세션 $shortId · ${_projectLabel(project)}',
+          '${title ?? '세션 $shortId'} · ${_projectLabel(project)}',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis, // ai-title 은 열 폭보다 길 수 있다
           style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
         ),
       ),

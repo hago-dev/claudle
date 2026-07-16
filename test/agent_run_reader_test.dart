@@ -54,9 +54,26 @@ String _assistantLine(
 const _shared = '저장소: /Users/me/proj (NestJS 11 + Drizzle).\n'
     '변경 내용을 보려면: `git diff`.\n\n## 리뷰 지적 (카테고리: ';
 
+/// 메인 세션 파일(`projects/<proj>/<sessionId>.jsonl`) 의 사람 입력 — 서브와 달리
+/// `isSidechain`·`agentId` 가 없고 경로에 `subagents/` 도 없다(실측).
+String _mainUserLine(String prompt, String ts) => json.encode({
+      'parentUuid': null,
+      'type': 'user',
+      'uuid': 'u1',
+      'timestamp': ts,
+      'sessionId': 'main-1',
+      'message': {'role': 'user', 'content': prompt},
+    });
+
+/// 메인 세션만 갖는 레코드 — 클로드 코드가 세션 제목을 계속 갱신한다(실측 81건/파일).
+/// `message` 키가 아예 없어서 **마지막 것이 최신 제목**이다.
+String _aiTitleLine(String title) =>
+    json.encode({'type': 'ai-title', 'aiTitle': title, 'sessionId': 'main-1'});
+
 void main() {
   late Directory tmp;
   late String subagents;
+  late String projectDir;
 
   void write(String path, String content) {
     final f = File(path);
@@ -66,7 +83,8 @@ void main() {
 
   setUp(() {
     tmp = Directory.systemTemp.createTempSync('agent_run_reader_test');
-    final session = p.join(tmp.path, 'projects', '-Users-me-proj', 'sess-1');
+    projectDir = p.join(tmp.path, 'projects', '-Users-me-proj');
+    final session = p.join(projectDir, 'sess-1');
     subagents = p.join(session, 'subagents');
 
     // 일반 서브에이전트(meta 있음).
@@ -114,6 +132,11 @@ void main() {
 
   AgentRun byId(List<AgentRun> runs, String id) =>
       runs.firstWhere((r) => r.agentId == id);
+
+  /// 메인 세션 파일을 깐다 — 서브와 달리 `subagents/` 밖, 프로젝트 디렉토리 바로 아래.
+  /// 방금 쓰이므로 mtime 은 지금(readLive 의 90초 창 안).
+  void writeMain(String sessionId, List<String> lines) =>
+      write(p.join(projectDir, '$sessionId.jsonl'), lines.join('\n'));
 
   /// 워크플로우 하나에 프롬프트가 [prompts] 인 에이전트들을 깔고, 설명만 뽑는다.
   List<String> fanOut(String workflowId, List<String> prompts,
@@ -340,5 +363,103 @@ void main() {
     final ids = reader(now: now).readLive().map((r) => r.agentId).toSet();
     expect(ids, contains('inside'));
     expect(ids, isNot(contains('outside')));
+  });
+
+  // ── 메인 세션 (사용자 요구: "ai 가 돌아가는게 무조건 보여야해") ──
+  //
+  // 서브 없이 프롬프트만 돌면 = 메인만 일하면 라이브 씬이 텅 빈다 → readLive 가 메인 세션도
+  // 반환해야 사람이 캠프에 선다. 서브와 섞이므로 agentType 으로 구분된다.
+
+  test('readLive: 메인 세션(subagents 아닌 경로)을 agentType main 으로 읽는다', () {
+    final now = DateTime.now().toUtc();
+    writeMain('main-1', [
+      _mainUserLine('프롬프트만 돌린다', now.toIso8601String()),
+      _aiTitleLine('오래된 제목'),
+      _assistantLine('main-1', [
+        ('Read', {'file_path': '/a/b/c.dart'}),
+      ], now.toIso8601String(), input: 11, output: 22),
+      _aiTitleLine('에이전트 시각화 및 작업 흐름 표시'),
+    ]);
+
+    final r = byId(reader(now: now).readLive(), 'main-1');
+    expect(r.agentType, mainAgentType); // 동물 해시를 타면 안 된다 — 사람으로만 그린다
+    expect(r.sessionId, 'main-1'); // agentId = sessionId
+    expect(r.workflowId, isNull);
+    expect(r.project, '-Users-me-proj');
+    expect(r.description, '에이전트 시각화 및 작업 흐름 표시'); // 마지막 ai-title = 최신
+    // 토큰·도구·시각·isRunning 은 서브와 같은 규약.
+    expect(r.toolCalls.single.detail, 'b/c.dart');
+    expect(r.inputTokens, 11);
+    expect(r.outputTokens, 22);
+    expect(r.isRunning, isTrue);
+  });
+
+  test('readLive: ai-title 이 없는 세션은 사람의 첫 프롬프트로 폴백', () {
+    final now = DateTime.now().toUtc();
+    writeMain('main-2', [_mainUserLine('b' * 150, now.toIso8601String())]);
+    expect(byId(reader(now: now).readLive(), 'main-2').description, 'b' * 100);
+  });
+
+  test('readLive: ai-title 이 없으면 last-prompt 가 첫 user 줄보다 우선 — 슬래시 명령은 '
+      '첫 user 줄이 사람 글이 아니라 <command-*> 확장이다(실측 88/142 세션)', () {
+    final now = DateTime.now().toUtc();
+    writeMain('main-cmd', [
+      _mainUserLine(
+          '<command-message>memory-consolidate</command-message>'
+          '<command-name>/memory-consolidate</command-name>',
+          now.toIso8601String()),
+      json.encode({
+        'type': 'last-prompt',
+        'lastPrompt': '/memory-consolidate shimkijun --apply',
+        'sessionId': 'main-cmd',
+      }),
+    ]);
+    expect(byId(reader(now: now).readLive(), 'main-cmd').description,
+        '/memory-consolidate shimkijun --apply');
+  });
+
+  test('readLive: ai-title 도 사람 프롬프트도 없으면 설명은 빈 값', () {
+    final now = DateTime.now().toUtc();
+    writeMain('main-3', [_assistantLine('main-3', [], now.toIso8601String())]);
+    expect(byId(reader(now: now).readLive(), 'main-3').description, isEmpty);
+  });
+
+  test('readLive: 메인 세션도 mtime 창(90초) 밖이면 건너뛴다', () {
+    final now = DateTime.now().toUtc();
+    final path = p.join(projectDir, 'main-old.jsonl');
+    write(path, _mainUserLine('오래 전', now.toIso8601String()));
+    File(path).setLastModifiedSync(now.subtract(const Duration(minutes: 10)));
+    expect(reader(now: now).readLive().map((r) => r.agentId),
+        isNot(contains('main-old')));
+  });
+
+  test('readAll 에는 메인 세션이 안 들어간다 — 기록 그룹은 서브(마리) 단위다', () {
+    writeMain('main-4', [
+      _mainUserLine('지시', '2026-07-02T06:00:00.000Z'),
+      _aiTitleLine('제목'),
+    ]);
+    expect(reader().readAll().map((r) => r.agentId).toSet(), {'aaa', 'bbb', 'ccc'});
+  });
+
+  // ── 그룹 제목 (사용자 요구: "워크플로우 ID 대신 사람이 읽는 타이틀") ──
+
+  test('readTitles: 워크플로우는 workflowName, 세션은 최신 ai-title', () {
+    // 워크플로우 JSON 은 subagents/ 가 아니라 세션 디렉토리 바로 밑에 있다(실측).
+    write(p.join(projectDir, 'sess-1', 'workflows', 'wf_1752_abc.json'),
+        json.encode({'workflowName': 'adversarial-verify-checks', 'agentCount': 6}));
+    writeMain('sess-1', [
+      _mainUserLine('지시', '2026-07-02T06:00:00.000Z'),
+      _aiTitleLine('오래된 제목'),
+      _aiTitleLine('최신 제목'),
+    ]);
+
+    final titles = reader().readTitles(reader().readAll());
+    expect(titles['wf_1752_abc'], 'adversarial-verify-checks');
+    expect(titles['sess-1'], '최신 제목');
+  });
+
+  test('readTitles: 제목 파일이 없거나 ai-title 이 없으면 키가 없다(호출부가 ID 폴백)', () {
+    // setUp 의 sess-1.jsonl 은 ai-title 이 없고, wf_1752_abc.json 도 안 깔았다.
+    expect(reader().readTitles(reader().readAll()), isEmpty);
   });
 }

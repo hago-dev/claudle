@@ -14,6 +14,10 @@ import 'claude_path_resolver.dart';
 ///  - 첫 줄(`type:"user"`)의 `message.content` = 받은 작업 지시.
 ///  - `type:"assistant"` 줄의 `content[]` 중 `tool_use` = 도구 호출(+`input` 에 무엇을 만졌는지),
 ///    `text` = 에이전트가 쓴 글, `message.usage` = 토큰.
+///
+/// 메인 세션(`projects/<project>/<sessionId>.jsonl` — 경로에 `subagents/` 가 없고 옆에
+/// `.meta.json` 도 없다)도 같은 레코드 규약이라 [readLive] 가 함께 읽는다([_readMain]).
+/// 다른 점은 타입([mainAgentType] 고정)·설명(최신 `ai-title`)뿐.
 class AgentRunReader {
   /// 마지막 레코드가 이 안쪽이면 아직 실행 중으로 본다.
   static const Duration _runningWindow = Duration(seconds: 60);
@@ -45,17 +49,24 @@ class AgentRunReader {
     return _describe(drafts);
   }
 
-  /// 라이브 폴링용 — 최근 [within] 안에 수정된 파일만 파싱한다. 지금 도는 에이전트의
-  /// 파일만 방금 쓰였으므로, 매 초 전체([readAll], 실측 2.3초)를 다시 읽지 않아도 된다.
-  /// (막 끝난 마리도 섞일 수 있다 — 호출부가 `isRunning` 으로 거른다.)
+  /// 라이브 폴링용 — **서브에이전트 + 메인 세션** 중 최근 [within] 안에 수정된 파일만
+  /// 파싱한다. 지금 도는 것의 파일만 방금 쓰였으므로, 매 초 전체([readAll], 실측 2.3초)를
+  /// 다시 읽지 않아도 된다. (막 끝난 것도 섞일 수 있다 — 호출부가 `isRunning` 으로 거른다.)
+  ///
+  /// 메인 세션이 섞이는 이유: 서브 없이 프롬프트만 돌면(= 메인만 일하면) 서브 파일이 아예
+  /// 없어서 라이브 씬이 텅 빈다. 둘은 [AgentRun.agentType] == [mainAgentType] 로 구분한다.
   ///
   /// [within] 은 판정 창(60초)보다 넉넉히 잡는다: 파일 mtime 은 마지막 레코드 시각과
   /// 미묘하게 다를 수 있어(항상 그 이상) 여유를 둬야 도는 마리를 놓치지 않는다.
+  ///
+  /// 비용: 메인 세션 파일은 크지만(실측 최대 15MB) 창 안에 드는 건 지금 도는 세션뿐이고
+  /// 전체 파싱이 실측 ~60ms/15MB(대부분 파일 읽기) 라 2초 폴링에 얹을 만하다.
   List<AgentRun> readLive({Duration within = const Duration(seconds: 90)}) {
     final cutoff = _now().toUtc().subtract(within);
     final drafts = <_Draft>[];
     for (final f in resolver.jsonlFiles()) {
-      if (!p.basename(f.path).startsWith('agent-')) continue;
+      final main = !p.basename(f.path).startsWith('agent-');
+      if (main && !_isMainSession(f.path)) continue; // 서브도 메인도 아닌 파일
       final DateTime modified;
       try {
         modified = f.statSync().modified.toUtc();
@@ -63,10 +74,87 @@ class AgentRunReader {
         continue; // 읽는 사이 사라짐/실패 → 건너뜀
       }
       if (modified.isBefore(cutoff)) continue; // 오래된 파일 = 안 도는 것, 파싱 생략
-      final draft = _readFile(f);
+      final draft = main ? _readMain(f) : _readFile(f);
       if (draft != null) drafts.add(draft);
     }
     return _describe(drafts);
+  }
+
+  /// 기록 탭 그룹의 사람이 읽는 제목 — 워크플로우는 `workflowName`, 세션은 최신 `ai-title`.
+  /// 키는 호출부의 그룹 키와 같은 규약(`workflowId ?? sessionId`), 못 찾은 그룹은 **키가 없다**
+  /// (호출부가 기존 ID 폴백을 쓴다).
+  ///
+  /// [representatives] 는 그룹당 대표 실행 1건 — 제목 파일은 그룹마다 하나뿐이라 [readAll] 이
+  /// 읽는 1400 파일을 다시 읽을 이유가 없다. **그룹을 확정한 뒤** 부르는 게 이 싸기의 전제다.
+  ///
+  /// 비용(실측 134그룹 = 워크플로우 80 + 세션 54): 합쳐 ~0.95초. 워크플로우 JSON 은 작아서
+  /// 공짜에 가깝고 값은 전부 세션 jsonl 이 치른다(그쪽만 파일당 수 MB). 기록 탭 첫 진입에서
+  /// readAll(1.7초) 뒤에 한 번만 든다 — 그래서 라이브(2초 폴링)엔 안 쓴다.
+  Map<String, String> readTitles(List<AgentRun> representatives) {
+    final titles = <String, String>{};
+    for (final r in representatives) {
+      final key = r.workflowId ?? r.sessionId;
+      if (titles.containsKey(key)) continue; // 대표가 여럿 와도 파일은 한 번만
+      final dir = _sessionDir(r.filePath);
+      if (dir == null) continue;
+      final title = r.workflowId != null
+          ? _workflowName(File(p.join(dir, 'workflows', '${r.workflowId}.json')))
+          : _aiTitle(File('$dir.jsonl'));
+      if (title != null) titles[key] = title;
+    }
+    return titles;
+  }
+
+  /// 이 서브에이전트 실행의 세션 디렉토리(= `subagents` 의 부모). 제목 파일 둘 다 여기 기준이다:
+  /// 세션은 `<sessionDir>.jsonl`, 워크플로우는 `<sessionDir>/workflows/<workflowId>.json`.
+  /// `subagents` 아래 깊이가 워크플로우 유무로 갈려서(0/2단계) 이름으로 거슬러 올라간다.
+  String? _sessionDir(String agentPath) {
+    var dir = p.dirname(agentPath);
+    while (p.basename(dir) != 'subagents') {
+      final parent = p.dirname(dir);
+      if (parent == dir) return null; // 루트까지 갔다 = 서브에이전트 구조가 아님
+      dir = parent;
+    }
+    return p.dirname(dir);
+  }
+
+  /// `workflows/<workflowId>.json` 의 `workflowName` — 사람이 지은 워크플로우 이름.
+  String? _workflowName(File f) {
+    try {
+      final decoded = json.decode(f.readAsStringSync());
+      if (decoded is Map) {
+        final name = decoded['workflowName'];
+        if (name is String && name.trim().isNotEmpty) {
+          return _clip(_oneLine(name), _descriptionMax);
+        }
+      }
+    } catch (_) {
+      // 파일 없음/깨짐 → 폴백(호출부가 ID 를 쓴다).
+    }
+    return null;
+  }
+
+  /// 메인 세션 파일의 최신 제목 = 마지막 `type:"ai-title"`. 없는 세션도 있다(실측).
+  ///
+  /// 제목만 필요할 땐 줄마다 [json.decode] 하지 않는다 — 세션 파일은 크고(실측 최대 15MB)
+  /// 여기선 그룹 수만큼 읽는다. 문자열 선별 후 파싱이 실측 40ms vs 48ms/15MB.
+  String? _aiTitle(File f) {
+    String? title;
+    for (final line in _rawLines(f)) {
+      if (!line.contains('"ai-title"')) continue;
+      final Object? decoded;
+      try {
+        decoded = json.decode(line);
+      } catch (_) {
+        continue;
+      }
+      if (decoded is! Map || decoded['type'] != 'ai-title') continue;
+      final t = decoded['aiTitle'];
+      if (t is String && t.trim().isNotEmpty) {
+        title = _clip(_oneLine(t), _descriptionMax); // 덮어쓴다 — 마지막이 최신
+      }
+    }
+    return title;
   }
 
   /// 에이전트 1마리의 전체 작업 로그 — 도구 호출(인자 포함)과 에이전트가 쓴 글을 순서대로.
@@ -94,16 +182,21 @@ class AgentRunReader {
     return steps;
   }
 
-  /// 파일의 JSON 객체 줄들. 부분/깨진 줄은 건너뛴다(flush 중일 수 있음).
-  Iterable<Map<Object?, Object?>> _lines(File f) sync* {
+  /// 파일의 줄들(원문). 읽기 실패(라이브 세션 중 사라짐 등)면 빈 목록.
+  Iterable<String> _rawLines(File f) {
     final String bytes;
     try {
       // 라이브 세션 중 스캔 → 읽는 사이 사라질 수 있음. 깨진 바이트도 통과.
       bytes = utf8.decode(f.readAsBytesSync(), allowMalformed: true);
     } catch (_) {
-      return;
+      return const [];
     }
-    for (final line in const LineSplitter().convert(bytes)) {
+    return const LineSplitter().convert(bytes);
+  }
+
+  /// 파일의 JSON 객체 줄들. 부분/깨진 줄은 건너뛴다(flush 중일 수 있음).
+  Iterable<Map<Object?, Object?>> _lines(File f) sync* {
+    for (final line in _rawLines(f)) {
       final Object? decoded;
       try {
         decoded = json.decode(line);
@@ -114,6 +207,55 @@ class AgentRunReader {
     }
   }
 
+  /// 파일 하나를 훑는다 — 서브와 메인 세션이 레코드 규약(timestamp·`message.usage`·
+  /// `content[].tool_use`)을 공유해서 스캔도 공유한다. 다른 건 부르는 쪽이 정한다.
+  _Scan _scan(File f) {
+    final s = _Scan();
+    for (final obj in _lines(f)) {
+      final ts = DateTime.tryParse((obj['timestamp'] as String?) ?? '')?.toUtc();
+      if (ts != null) {
+        if (s.startedAt == null || ts.isBefore(s.startedAt!)) s.startedAt = ts;
+        if (s.endedAt == null || ts.isAfter(s.endedAt!)) s.endedAt = ts;
+      }
+
+      // 메인 세션만 갖는 레코드들 — `message` 가 아예 없어서 아래 검사보다 먼저 본다.
+      // 둘 다 세션이 도는 동안 갱신되므로 덮어쓴다(마지막 = 최신).
+      if (obj['type'] == 'ai-title') {
+        final title = obj['aiTitle'];
+        if (title is String && title.trim().isNotEmpty) s.aiTitle = title;
+        continue;
+      }
+      if (obj['type'] == 'last-prompt') {
+        final last = obj['lastPrompt'];
+        if (last is String && last.trim().isNotEmpty) s.lastPrompt = last;
+        continue;
+      }
+
+      final message = obj['message'];
+      if (message is! Map) continue;
+      final content = message['content'];
+
+      if (s.prompt == null && obj['type'] == 'user' && content is String) {
+        s.prompt = content;
+      }
+
+      if (content is List) {
+        for (final block in content) {
+          if (block is Map && block['type'] == 'tool_use') {
+            s.toolCalls.add(_toolCall(block));
+          }
+        }
+      }
+
+      final usage = message['usage'];
+      if (usage is Map) {
+        s.inputTokens += (usage['input_tokens'] as num?)?.toInt() ?? 0;
+        s.outputTokens += (usage['output_tokens'] as num?)?.toInt() ?? 0;
+      }
+    }
+    return s;
+  }
+
   _Draft? _readFile(File f) {
     final path = f.path;
     final parts = path.split(RegExp(r'[/\\]')); // Windows 겸용
@@ -122,42 +264,8 @@ class AgentRunReader {
     final project = ClaudePathResolver.projectFromPath(path);
     if (project == null) return null;
 
-    String? prompt;
-    DateTime? startedAt, endedAt;
-    final toolCalls = <ToolCall>[];
-    int inputTokens = 0, outputTokens = 0;
-
-    for (final obj in _lines(f)) {
-      final ts = DateTime.tryParse((obj['timestamp'] as String?) ?? '')?.toUtc();
-      if (ts != null) {
-        if (startedAt == null || ts.isBefore(startedAt)) startedAt = ts;
-        if (endedAt == null || ts.isAfter(endedAt)) endedAt = ts;
-      }
-
-      final message = obj['message'];
-      if (message is! Map) continue;
-      final content = message['content'];
-
-      if (prompt == null && obj['type'] == 'user' && content is String) {
-        prompt = content;
-      }
-
-      if (content is List) {
-        for (final block in content) {
-          if (block is Map && block['type'] == 'tool_use') {
-            toolCalls.add(_toolCall(block));
-          }
-        }
-      }
-
-      final usage = message['usage'];
-      if (usage is Map) {
-        inputTokens += (usage['input_tokens'] as num?)?.toInt() ?? 0;
-        outputTokens += (usage['output_tokens'] as num?)?.toInt() ?? 0;
-      }
-    }
-
-    if (startedAt == null || endedAt == null) return null; // 빈/무의미한 파일
+    final s = _scan(f);
+    if (s.startedAt == null || s.endedAt == null) return null; // 빈/무의미한 파일
 
     final (agentType, metaDescription) = _meta(path);
     return _Draft(
@@ -172,16 +280,62 @@ class AgentRunReader {
                 ? parts[subIdx + 2]
                 : null,
         description: '', // _describe 에서 확정
-        startedAt: startedAt,
-        endedAt: endedAt,
-        toolCalls: toolCalls,
-        inputTokens: inputTokens,
-        outputTokens: outputTokens,
-        isRunning: _now().toUtc().difference(endedAt) < _runningWindow,
+        startedAt: s.startedAt!,
+        endedAt: s.endedAt!,
+        toolCalls: s.toolCalls,
+        inputTokens: s.inputTokens,
+        outputTokens: s.outputTokens,
+        isRunning: _now().toUtc().difference(s.endedAt!) < _runningWindow,
       ),
       metaDescription: metaDescription,
-      prompt: prompt ?? '',
+      prompt: s.prompt ?? '',
     );
+  }
+
+  /// 메인 세션 파일(`projects/<project>/<sessionId>.jsonl`) → 사람 1명분의 실행.
+  ///
+  /// 서브와 다른 것만 여기서 정한다: 타입은 [mainAgentType] 고정(`meta.json` 이 없다),
+  /// 설명은 최신 `ai-title` > 사람이 마지막으로 친 글 > 첫 `user` 줄. `ai-title` 이 없는
+  /// 세션이 실측 142/438 이라 폴백이 실제로 쓰인다 — 그리고 그중 88건은 첫 `user` 줄이
+  /// `<command-*>` 확장이라 [_Scan.lastPrompt] 를 먼저 본다.
+  /// 앞의 둘은 "프롬프트보다 우선하는 짧은 제목" 이라 [_describe] 의 meta 라벨 자리를 쓴다.
+  _Draft? _readMain(File f) {
+    final path = f.path;
+    final project = ClaudePathResolver.projectFromPath(path);
+    if (project == null) return null;
+
+    final s = _scan(f);
+    if (s.startedAt == null || s.endedAt == null) return null; // 빈/무의미한 파일
+
+    final sessionId = p.basenameWithoutExtension(path);
+    return _Draft(
+      run: AgentRun(
+        agentId: sessionId,
+        agentType: mainAgentType,
+        project: project,
+        sessionId: sessionId,
+        filePath: path,
+        workflowId: null,
+        description: '', // _describe 에서 확정
+        startedAt: s.startedAt!,
+        endedAt: s.endedAt!,
+        toolCalls: s.toolCalls,
+        inputTokens: s.inputTokens,
+        outputTokens: s.outputTokens,
+        isRunning: _now().toUtc().difference(s.endedAt!) < _runningWindow,
+      ),
+      metaDescription:
+          s.aiTitle == null ? null : _clip(_oneLine(s.aiTitle!), _descriptionMax),
+      prompt: s.lastPrompt ?? s.prompt ?? '',
+    );
+  }
+
+  /// 메인 세션 파일인가 — `projects/<project>/<sessionId>.jsonl`, 즉 프로젝트 디렉토리
+  /// **바로 아래**. 서브는 그 밑 `subagents/` 로 한 단계 이상 더 들어간다.
+  bool _isMainSession(String path) {
+    final parts = path.split(RegExp(r'[/\\]')); // Windows 겸용
+    final idx = parts.lastIndexOf('projects');
+    return idx >= 0 && parts.length == idx + 3;
   }
 
   /// 도구 호출 → 이름 + 사람이 읽을 인자 하나.
@@ -309,10 +463,34 @@ class AgentRunReader {
   }
 }
 
+/// 파일 하나를 훑은 결과 — 서브와 메인 세션이 공유하는 레코드들. 정체성(누구인지·어느 세션인지)은
+/// 경로에서 나오므로 여기 없다.
+class _Scan {
+  DateTime? startedAt, endedAt;
+
+  /// 사람이 준 첫 지시 = `type:"user"` 의 `content` 가 String 인 첫 줄(도구 결과는 List 다).
+  String? prompt;
+
+  /// 최신 제목 — 메인 세션의 마지막 `type:"ai-title"`. 서브 파일엔 이 레코드가 없다.
+  String? aiTitle;
+
+  /// 사람이 마지막으로 친 글 — 메인 세션의 `type:"last-prompt"`. 슬래시 명령을 쓰면 첫 `user`
+  /// 줄이 `<command-message>…` 확장이라 사람 글이 아니다(실측: 제목 없는 142 세션 중 88건).
+  /// 이 레코드는 사람이 친 원문 그대로다(실측 437/438 세션 보유).
+  String? lastPrompt;
+
+  final toolCalls = <ToolCall>[];
+  int inputTokens = 0, outputTokens = 0;
+}
+
 /// 읽자마자의 1마리 — 설명은 아직 미정이라 그 재료(meta 라벨·첫 프롬프트)를 들고 있다.
 class _Draft {
   final AgentRun run;
+
+  /// 1순위 재료(없으면 null) — 서브는 `meta.json` 의 라벨, 메인 세션은 최신 `ai-title`.
+  /// 둘 다 "프롬프트보다 우선하는 짧은 제목" 이라 [AgentRunReader._describe] 는 출처를 안 가린다.
   final String? metaDescription;
+
   final String prompt;
   const _Draft({
     required this.run,
