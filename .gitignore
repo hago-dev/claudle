@@ -33,6 +33,9 @@ migrate_working_dir/
 /build/
 /coverage/
 
+# 배포 zip 산출물(사내 ad-hoc 배포 — 바이너리라 git 미추적)
+/dist/
+
 # Windows 설치파일 컴파일 산출물(Inno Setup)
 /windows/installer/dist/
 

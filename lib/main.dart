@@ -104,6 +104,7 @@ class _ClaudleAppState extends State<ClaudleApp>
     trayManager.addListener(this);
     windowManager.addListener(this);
     _controller.limits.addListener(_updateTrayTitle); // 헤드라인: 세션 한도
+    _controller.limits.addListener(_updateTrayTooltip); // 툴팁: 리셋 예정 시각
     _controller.totalsToday.addListener(_onTotals); // 폴백 텍스트 + 활동 감지
     _controller.phase.addListener(_updateTrayTooltip);
     _bootstrap();
@@ -202,16 +203,25 @@ class _ClaudleAppState extends State<ClaudleApp>
         : '${compactTokens(t.totalTokens)} · ${money(t.costUsd)}');
   }
 
+  /// 메뉴바 아이콘에 커서를 올리면 뜨는 툴팁.
+  /// macOS: 세션 한도가 언제 초기화되는지 한국 시간(KST)으로. 한도 미상이면 상태로 폴백.
+  /// Windows: 툴팁을 헤드라인 표시에 쓰므로(타이틀 미지원) 건드리지 않는다.
   void _updateTrayTooltip() {
-    // Windows 는 툴팁을 헤드라인 표시에 사용하므로(타이틀 미지원) 상태로 덮어쓰지 않는다.
     if (Platform.isWindows) return;
-    trayManager.setToolTip('Claudle — ${_controller.status.value}');
+    final s = _controller.limits.value?.session;
+    if (s?.resetsAt != null) {
+      trayManager.setToolTip(
+          'Claudle · 세션 초기화 예정 ${resetClockKst(s!.resetsAt!)} (KST)');
+    } else {
+      trayManager.setToolTip('Claudle — ${_controller.status.value}');
+    }
   }
 
   @override
   void dispose() {
     _dogTimer?.cancel();
     _controller.limits.removeListener(_updateTrayTitle);
+    _controller.limits.removeListener(_updateTrayTooltip);
     _controller.totalsToday.removeListener(_onTotals);
     _controller.phase.removeListener(_updateTrayTooltip);
     trayManager.removeListener(this);

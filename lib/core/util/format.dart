@@ -35,3 +35,8 @@ String resetClockKo(DateTime t) {
   final mm = t.minute.toString().padLeft(2, '0');
   return '($wd) $ampm $h12:$mm';
 }
+
+/// 재설정 시각을 한국 시간(KST=UTC+9, 서머타임 없음)으로 고정 표기: "(일) 오후 6:59".
+/// [utc] 는 서버 resets_at(UTC). 시스템 타임존과 무관하게 항상 한국 시간으로 환산한다.
+String resetClockKst(DateTime utc) =>
+    resetClockKo(utc.toUtc().add(const Duration(hours: 9)));
