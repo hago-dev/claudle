@@ -30,7 +30,8 @@ allowed-tools:
 
 ### UI 리빌드 (`AnimatedBuilder` + `Listenable.merge`)
 - 값이 실제로 바뀌지 않았는데 `revision.value++` 등으로 불필요하게 전체 대시보드를 리빌드하지 않는지 — revision/총계 리빌드는 `dashboard.dart:206-208`의 `AnimatedBuilder(animation: Listenable.merge([controller.totalsAll, controller.revision]))`가 담당(같은 파일 `:150` 주석: "총계 변화·revision(별칭)엔 `AnimatedBuilder`, 기간 선택엔 `setState` 로 리빌드").
-- `dashboard.dart`/`agents_screen.dart`의 다수 private 위젯 분해가 리빌드 범위를 좁히는 데 기여하는지(범위가 넓은 `AnimatedBuilder`/`Listenable.merge`가 새로 생기면 회귀). 참고로 `ValueListenableBuilder`는 `dashboard.dart` 3곳(`:31` status, `:46`·`:109` limits)뿐이고 revision과 무관하다 — `agents_screen.dart`는 `setState` + `AnimatedBuilder(Listenable.merge([_clock, _legs]))`(`:550-551`) + `FutureBuilder`(`:965`)로 리빌드한다.
+- `dashboard.dart`/에이전트 화면들의 다수 private 위젯 분해가 리빌드 범위를 좁히는 데 기여하는지(범위가 넓은 `AnimatedBuilder`/`Listenable.merge`가 새로 생기면 회귀). 참고로 `ValueListenableBuilder`는 `dashboard.dart` 3곳뿐이고 revision과 무관하다 — 에이전트 축은 `setState`(셸 폴링) + `AnimatedBuilder(Listenable.merge([_clock, _legs]))`(`agent_history_view.dart` 재생) + `FutureBuilder`(`agent_log_sheet.dart` 상세) + `Ticker`→`AnimatedBuilder`(`forest_scene_view.dart` 라이브 숲)로 리빌드한다.
+- **라이브 숲(`forest_scene_view.dart`)이 상시구동 성능의 핵심** — `Ticker` 1개가 60fps로 도는 유일한 자리다. `RepaintBoundary` 2개(배경/캐릭터층)가 살아 있는지, `_Backdrop`에 프레임 단위 입력(clock 등)이 새로 들어가지 않았는지 본다(들어가면 정적 배경이 매 프레임 리페인트된다 — `night` 같은 bool 플래그만 허용). 씬 이벤트는 Timer 없이 `clock` 스탬프로 유도한다(신규 `Timer`/`AnimationController`가 생기면 회귀).
 
 ## 프로파일링
 ```bash

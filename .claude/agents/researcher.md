@@ -30,7 +30,7 @@ skills:
 - 잘 모르는 라이브러리나 새로운 기능을 다룰 때
 
 ## 디렉토리 지도 (레이어드, 의존 방향 `presentation → application → data → domain`, `core`는 공용)
-> 이 화살표는 **역방향 금지**를 뜻하지 인접 계층만 참조한다는 뜻은 아니다 — 에이전트 축은 계층을 건너뛴다(`presentation/agents_screen.dart:11`이 `data/providers/claude_code/agent_run_reader.dart`를 직접 import). 과금 집계와 별개 축이라 DB·application을 안 거치는 의도된 설계다.
+> 이 화살표는 **역방향 금지**를 뜻하지 인접 계층만 참조한다는 뜻은 아니다 — 에이전트 축은 계층을 건너뛴다(`presentation/agents_screen.dart`·`agent_log_sheet.dart`가 `data/providers/claude_code/agent_run_reader.dart`를 직접 import). 과금 집계와 별개 축이라 DB·application을 안 거치는 의도된 설계다.
 ```
 lib/
 ├── main.dart                — 진입점. hudMode(`Platform.isWindows || TOKENBAR_FORCE_HUD=1`)로 macOS 메뉴바 vs Windows HUD 분기. env 오버라이드 덕에 macOS에서도 HUD 경로 재현 가능.
@@ -52,8 +52,11 @@ lib/
 │   ├── limits/limits_source.dart    — LimitsSource 인터페이스.
 │   └── models/                      — UsageEvent, SubscriptionLimits, AgentRun.
 └── presentation/
-    ├── dashboard.dart        — 메인 대시보드.
-    └── agents_screen.dart    — 서브에이전트 시각화.
+    ├── dashboard.dart            — 메인 대시보드.
+    └── (에이전트 시각화 6파일)   — agents_screen.dart(셸: 탭·폴링) ·
+        agent_history_view.dart(기록·재생·카드) · agent_log_sheet.dart(상세 시트) ·
+        forest_scene.dart(라이브 숲 **모델** — 위젯을 모른다) ·
+        forest_scene_view.dart(그 뷰) · agent_widgets.dart(셋이 공유하는 조각).
 ```
 
 ## 탐색 방법

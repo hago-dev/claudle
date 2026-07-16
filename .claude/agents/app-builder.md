@@ -30,7 +30,8 @@ skills:
 - 잘 모르는 라이브러리나 새로운 기능을 다룰 때
 
 ## 네비게이션 구조 (상세는 `/app-nav` 참조 — 라우터 라이브러리 없음)
-- 화면 파일 2개: `presentation/dashboard.dart`(최상위 화면 2개 — `DashboardScreen`/`WindowsHudScreen`을 `main.dart`가 `hudMode`로 택일, `_LimitsPanel` 공유), `presentation/agents_screen.dart`(`AgentsScreen` — 서브에이전트 시각화).
+- 최상위 화면 파일 2개: `presentation/dashboard.dart`(최상위 화면 2개 — `DashboardScreen`/`WindowsHudScreen`을 `main.dart`가 `hudMode`로 택일, `_LimitsPanel` 공유), `presentation/agents_screen.dart`(`AgentsScreen` — 서브에이전트 시각화의 **셸**: 탭 전환·라이브 폴링만).
+- 에이전트 시각화는 6파일로 갈려 있다(2026-07-17, 2002줄 단일 파일에서 분리): 셸 `agents_screen.dart` · 기록 `agent_history_view.dart` · 상세 `agent_log_sheet.dart` · 라이브 숲 모델 `forest_scene.dart`(위젯을 모른다) + 뷰 `forest_scene_view.dart` · 공유 `agent_widgets.dart`. 어디를 고칠지는 `/app-conventions` 위젯 분해 규칙 참조.
 - 전환은 `Navigator.of(context).push(MaterialPageRoute(builder: (_) => const XxxScreen()))`. 이름 있는 라우트나 `go_router` 등은 도입하지 않는다(YAGNI — 화면 수가 적어 현재 충분).
 - 새 화면: `lib/presentation/{name}.dart` 또는 `{name}_screen.dart`(접미사 강제 없음, 다이얼로그성이면 접미사 없이 / 풀스크린이면 `_screen` 권장). 최상위 위젯은 `StatelessWidget`(로컬 state 필요 시만 `StatefulWidget`), `Scaffold` 루트.
 

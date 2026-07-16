@@ -15,7 +15,7 @@ allowed-tools:
 `$ARGUMENTS`로 화면명을 받아 기존 패턴에 맞춰 새 화면을 생성/등록한다.
 
 ## 현재 네비게이션 구조 (단순 — 라우터 라이브러리 없음)
-- 화면 **파일** 2개 / 최상위 **화면 클래스** 3개: `presentation/dashboard.dart`(`DashboardScreen`=macOS 대시보드 · `WindowsHudScreen`=Windows HUD — `main.dart:281-283`이 `hudMode`로 택일, `_LimitsPanel` 공유), `presentation/agents_screen.dart`(`AgentsScreen` — 서브에이전트 시각화).
+- 최상위 **화면 클래스** 3개: `presentation/dashboard.dart`(`DashboardScreen`=macOS 대시보드 · `WindowsHudScreen`=Windows HUD — `main.dart:281-283`이 `hudMode`로 택일, `_LimitsPanel` 공유), `presentation/agents_screen.dart`(`AgentsScreen` — 서브에이전트 시각화). 후자는 셸이고 실제 뷰는 5파일에 갈려 있다(`/app-conventions` 참조) — 새 화면을 붙일 때 건드릴 곳은 여전히 이 3개뿐이다.
 - 전환은 표준 `Navigator.of(context).push(MaterialPageRoute(builder: (_) => const AgentsScreen()))` — 이름 있는 라우트(`onGenerateRoute`)나 `go_router` 등 라우팅 라이브러리 없음.
 - `Navigator.pop(ctx)` / `Navigator.pop(ctx, value)`로 값 반환하는 다이얼로그성 팝업도 동일 파일 내에서 처리(별도 라우트로 안 뺌).
 
