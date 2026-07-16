@@ -293,8 +293,19 @@ class AgentRunReader {
 
       if (content is List) {
         for (final block in content) {
-          if (block is Map && block['type'] == 'tool_use') {
+          if (block is! Map) continue;
+          if (block['type'] == 'tool_use') {
+            final id = block['id'];
+            if (id is String) s.toolIds[id] = s.toolCalls.length;
             s.toolCalls.add(_toolCall(block));
+          } else if (block['type'] == 'tool_result' &&
+              block['is_error'] == true) {
+            // 결과는 나중 user 줄로 돌아온다 — id 로 원 호출을 찾아 실패 표식만 얹는다.
+            final i = s.toolIds[block['tool_use_id']];
+            if (i != null) {
+              final t = s.toolCalls[i];
+              s.toolCalls[i] = ToolCall(t.name, t.detail, isError: true);
+            }
           }
         }
       }
@@ -532,6 +543,9 @@ class _Scan {
   String? lastPrompt;
 
   final toolCalls = <ToolCall>[];
+
+  /// tool_use `id` → [toolCalls] 인덱스 — 나중 줄의 `tool_result`(is_error)를 원 호출에 되붙인다.
+  final toolIds = <String, int>{};
   int inputTokens = 0, outputTokens = 0;
 }
 

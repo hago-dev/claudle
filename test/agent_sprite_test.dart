@@ -2,7 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tokenbar/domain/models/agent_run.dart';
-import 'package:tokenbar/presentation/agents_screen.dart';
+import 'package:tokenbar/presentation/forest_scene.dart';
 
 /// 사용자 요구: "동물들 랜덤으로 — 등장할 때마다 종이 다시 섞여야 한다".
 ///

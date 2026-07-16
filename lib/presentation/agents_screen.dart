@@ -10,6 +10,7 @@ import 'package:window_manager/window_manager.dart';
 import '../core/util/format.dart';
 import '../data/providers/claude_code/agent_run_reader.dart';
 import '../domain/models/agent_run.dart';
+import 'forest_scene.dart';
 
 /// 아이솔레이트 진입점 — [AgentRunReader.readAll] 은 1400+ 파일을 동기로 읽어(실측 2.3초)
 /// UI 스레드에서 부르면 그동안 프레임이 통째로 멈춘다. [AgentRun] 은 평범한 값 객체라
@@ -1153,60 +1154,6 @@ class _ExpandableTextState extends State<_ExpandableText> {
   }
 }
 
-// ── 색 ─────────────────────────────────────────────────────
-
-/// 자주 보이는 타입은 고정 색(눈에 익게), 나머지 롱테일(총 23종)은 이름 해시 → 팔레트.
-const Map<String, Color> _fixedColors = {
-  mainAgentType: Color(0xFFCBD5E1), // 세션(사람) — 중립 슬레이트, 종별 색과 안 겹치게
-  'workflow-subagent': Color(0xFF7C5CFF), // 앱 시드 바이올렛
-  'delegate': Color(0xFF4ADE80),
-  'general-purpose': Color(0xFF38BDF8),
-  'Explore': Color(0xFFFBBF24),
-  'red-team': Color(0xFFF87171),
-  'researcher': Color(0xFFA78BFA),
-  'security-auditor': Color(0xFFFB923C),
-  'code-reviewer': Color(0xFF34D399),
-  'test-writer': Color(0xFF22D3EE),
-  'Plan': Color(0xFFE879F9),
-  'mentor': Color(0xFFFDE047),
-};
-
-const List<Color> _palette = [
-  Color(0xFF60A5FA),
-  Color(0xFFF472B6),
-  Color(0xFF2DD4BF),
-  Color(0xFFC084FC),
-  Color(0xFFFACC15),
-  Color(0xFF94A3B8),
-];
-
-/// **기록·배지** 쪽 타입별 색 — 재생 카드와 구성 미리보기 색점이 "어떤 타입 조합인지" 를
-/// 읽는 자리라 결정론을 유지한다. 해시는 직접 계산 — `String.hashCode` 는 런타임이 바꿀 수 있다.
-///
-/// **라이브는 이걸 안 쓴다** — 색도 등장마다 섞여야 한다는 사용자 요구로 [_ForestScene.sync]
-/// 가 [randomAgentColor] 로 뽑고, 시트엔 그 마리의 색을 넘긴다(종과 같은 규약).
-Color agentColor(String agentType) {
-  final fixed = _fixedColors[agentType];
-  if (fixed != null) return fixed;
-  var h = 0;
-  for (final c in agentType.codeUnits) {
-    h = (h * 31 + c) & 0x7fffffff;
-  }
-  return _palette[h % _palette.length];
-}
-
-/// 라이브 랜덤 추첨용 색 풀 — 타입 고정색(사람용 슬레이트 제외) + 해시 팔레트의 합집합.
-/// 따로 안 만들고 합쳐 쓴다: 이미 라벨·배지에서 검증된 색들이고, 타입색이 늘면 풀도 따라 는다.
-final List<Color> _colorPool = [
-  for (final e in _fixedColors.entries)
-    if (e.key != mainAgentType) e.value,
-  ..._palette,
-];
-
-/// **라이브** 등장 1회 = 새로 섞은 색 하나 — [randomAnimalSprite] 와 같은 규약(사용자:
-/// "색상도 여러 가지였으면"). 종과 독립으로 뽑아 같은 종끼리도 색이 갈린다.
-Color randomAgentColor(math.Random rnd) => _colorPool[rnd.nextInt(_colorPool.length)];
-
 // ── 그룹 ────────────────────────────────────────────────────
 
 /// 재생 단위 — 같은 워크플로우(있으면), 없으면 같은 세션에서 뜬 에이전트 묶음.
@@ -1257,12 +1204,12 @@ List<_RunGroup> _groupRuns(List<AgentRun> runs) {
 }
 
 /// 씬 발밑 이름표 — 이 마리가 받은 지시를 짧게. 없으면(워크플로우 라이브는 description 이
-/// 프롬프트 꼬리라 대개 있다) 타입으로 폴백. 셀이 104px 라 [_labelMaxChars] 자에서 자른다.
+/// 프롬프트 꼬리라 대개 있다) 타입으로 폴백. 셀이 104px 라 [labelMaxChars] 자에서 자른다.
 String _actionLabel(AgentRun run) {
   final desc = run.description.trim();
   final base = desc.isEmpty ? run.agentType : desc;
-  return base.characters.length > _labelMaxChars
-      ? '${base.characters.take(_labelMaxChars)}…'
+  return base.characters.length > labelMaxChars
+      ? '${base.characters.take(labelMaxChars)}…'
       : base;
 }
 
@@ -1283,53 +1230,8 @@ String _projectLabel(String encoded) {
 }
 
 // ── 캐릭터(큐브펫) ────────────────────────────────────────────
-
-/// `assets/agents/animal-<name>.png` 24종. 해시 배정 풀이자 declared asset 목록과 1:1.
-const List<String> _animalPool = [
-  'beaver', 'bee', 'bunny', 'cat', 'caterpillar', 'chick', 'cow', 'crab',
-  'deer', 'dog', 'elephant', 'fish', 'fox', 'giraffe', 'hog', 'koala',
-  'lion', 'monkey', 'panda', 'parrot', 'penguin', 'pig', 'polar', 'tiger',
-];
-
-/// **기록** 쪽 마리 → 스프라이트(`assets/agents/animal-<종>.png`). 종은 타입이 아니라
-/// 개체(agentId) 해시 — 타입 고정 배정(delegate=개)은 팬아웃이 전부 같은 동물이라 심심하다는
-/// 사용자 요구로 버렸다. 결정론인 이유: 재생 카드와 그 시트가 같은 동물을 가리켜야 해서
-/// (어긋나면 클릭한 펭귄의 시트에 개가 뜬다). 해시는 [agentColor] 와 같은 h*31+c 직접 계산.
-///
-/// **라이브는 이걸 안 쓴다** — 등장할 때마다 종이 다시 섞여야 한다는 사용자 요구로
-/// [_ForestScene.sync] 가 [randomAnimalSprite] 로 뽑고, 시트엔 그 마리의 스프라이트를 넘긴다.
-String agentSprite(AgentRun run) {
-  var h = 0;
-  for (final c in run.agentId.codeUnits) {
-    h = (h * 31 + c) & 0x7fffffff;
-  }
-  return 'animal-${_animalPool[h % _animalPool.length]}';
-}
-
-/// **라이브** 등장 1회 = 새로 섞은 종 하나. 씬에 나타나는 순간 [_ForestScene._rnd] 로 뽑아
-/// [_Beast.sprite] 에 저장한다 — 화면에 있는 동안엔 유지(매 폴링 섞으면 2초마다 종이 바뀌는
-/// 스트로브가 된다), 떠났다 다시 등장하면 새 종. 랜덤 소스는 호출자가 준다(테스트가 시드를 쥔다).
-String randomAnimalSprite(math.Random rnd) =>
-    'animal-${_animalPool[rnd.nextInt(_animalPool.length)]}';
-
-/// `assets/agents/character-<...>.png` 12종 — 서브를 스폰한 메인(부모)을 상징하는 사람.
-/// 동물이 서브에이전트라면 이쪽은 그 위의 감독자(세션).
-const List<String> _personPool = [
-  'character-male-a', 'character-male-b', 'character-male-c',
-  'character-male-d', 'character-male-e', 'character-male-f',
-  'character-female-a', 'character-female-b', 'character-female-c',
-  'character-female-d', 'character-female-e', 'character-female-f',
-];
-
-/// 세션 → 사람 스프라이트. 같은 세션(그 세션이 스폰한 서브들의 부모)은 늘 같은 사람이 되게
-/// [agentColor]·[agentSprite] 와 같은 h*31+c 로 직접 계산한다(실행마다 안 바뀌게).
-String personSprite(String sessionId) {
-  var h = 0;
-  for (final c in sessionId.codeUnits) {
-    h = (h * 31 + c) & 0x7fffffff;
-  }
-  return _personPool[h % _personPool.length];
-}
+// 종·색 배정 규약(agentSprite/personSprite/randomAnimalSprite/randomAgentColor)은
+// forest_scene.dart 로 — 씬 모델(sync)이 쓰는 쪽에 산다.
 
 /// 스프라이트 한 마리 — 정지 PNG(64x64)를 [phase] 로 통통 튀게. 걷기 프레임이 없으니
 /// 작업 중([running])일 때만 바닥에서 콩콩 뛰고(Y −4~0px), 살짝 기운다. 끝나면 정지.
@@ -1374,459 +1276,16 @@ class _Critter extends StatelessWidget {
   }
 }
 
-// ── 숲 씬(라이브) ────────────────────────────────────────────
+// ── 숲 씬(라이브) 뷰 ──────────────────────────────────────────
 //
-// 세션(부모) = 사람 1명이 제 빈터 **위**에 서 있고, 그 세션이 띄운 서브 = 동물들이 그
-// 앞마당(빈터)에서 논다. 세션 1개 = 세로 열 1개.
-//
-// 단순화: 인파일 섹션 — 원래 lib/presentation/forest_scene.dart 로 뺄 서브시스템이다.
-// 필요 시 이 섹션 전체를 그대로 옮기면 된다(위쪽 카드 UI 와 공유하는 건 _Critter·
-// _TypeBadge·_AgentLogSheet·_toolIcon·agentColor/agentSprite/personSprite 뿐).
+// 모델(ForestScene·Beast·Clearing·SceneProp)과 셀 기하·배정 규약은 forest_scene.dart 에.
+// 여기는 그리기(위젯)만 — 팔레트는 뷰 관심사라 잔류한다.
 
-// 씬 구획
-const _padX = 24.0, _playTopGap = 30.0, _playPadBottom = 20.0, _minColW = 300.0;
-// 크기 — 실측 기준. 동물 56 = 카드와 동일, 사람 64 = 1:1 네이티브.
-const _animalSize = 56.0, _personSize = 64.0;
-const _depthMin = 0.86, _depthSpan = 0.20; // 원근 스케일
-// 셀(마리 1개 박스) — 고정 기하라 스케일이 변해도 지면선이 안 흔들린다.
-const _cellW = 104.0, _chipH = 16.0, _spriteBoxH = 72.0, _labelH = 18.0;
-const _cellH = _chipH + _spriteBoxH + _labelH; // 106
-const _groundY = _chipH + _spriteBoxH; // 88 — 셀 안 지면선
-// 배회
-const _speedWander = 26.0, _speedWanderVar = 20.0; // 26..46 px/s
-const _speedChase = 78.0, _speedChaseVar = 34.0; // 78..112 px/s
-const _arriveWander = 3.0, _arriveChase = 26.0; // 26 = 겹치기 전에 멈춘다
-// 위상/초 — [_Critter] 는 한 위상에 두 번 튄다 → 1.4 ≈ 기존 700ms 컨트롤러.
-const _bobHzWander = 1.4, _bobHzChase = 2.3;
-const _restMin = 0.4, _restVar = 1.2, _repick = 6.0, _maxDt = 0.05;
-const _spawnJitter = 14.0, _fadeOut = 0.45;
-// 상한
-const _labelMax = 12, _beastMax = 48;
-// 발밑 이름표(동작명) 글자 수 — 104px 셀에 한 줄. 넘치면 …. 사용자 요청("한 10글자").
-const _labelMaxChars = 10;
 // 팔레트 — 앱은 dark 단일(main.dart). 숲은 초록이라 시드(바이올렛)를 안 따른다(의도).
 const _skyTop = Color(0xFF16281C), _skyBottom = Color(0xFF2A4A31);
+// 밤 하늘 — 낮보다 파랗고 어둡게. 새벽 팬아웃이 낮과 같은 하늘이면 시간 감각이 없다.
+const _skyTopNight = Color(0xFF0A1020), _skyBottomNight = Color(0xFF152A2E);
 const _plateBg = Color(0xB3101A14);
-
-/// 스프라이트 콘텐츠 바닥이 64px 캔버스 바닥에서 뜬 픽셀 — alpha bbox 실측값. 기본 9.
-/// 아래 종들은 프레임 안에 작게 그려져 많이 뜬다(안 넣으면 발밑 그림자가 6~10px 어긋난다).
-const _botGap = <String, int>{
-  'animal-monkey': 14, 'animal-fish': 15, 'animal-koala': 16, 'animal-parrot': 17,
-  'animal-elephant': 17, 'animal-penguin': 18, 'animal-chick': 18, 'animal-crab': 19,
-  'forest-rocks-high': 0, 'forest-tent': 5, 'forest-rocks-low': 8, 'forest-stones': 8,
-  'forest-tree': 12, 'forest-rocks-ramp': 12, 'forest-tree-high': 13, 'forest-flag': 14,
-  'forest-plant': 21,
-};
-
-/// 콘텐츠 발이 스프라이트 박스 top 에서 차지하는 비율 — 그리기: `top = 발밑y - _footInset(s)*size`.
-/// 사람 12종은 전부 botGap 12~13 이라 한 값, 표에 없는 동물 16종은 6~11 이라 기본 9(최대 오차 2.6px).
-double _footInset(String s) =>
-    (64 - (s.startsWith('character-') ? 12 : (_botGap[s] ?? 9))) / 64; // 0.70(crab) ~ 1.0(rocks-high)
-
-/// 팩마다 캔버스 대비 콘텐츠 스케일이 달라(나무 22×38 < 여우 39×46) 종류별 렌더 크기가 강제된다.
-/// 64px 로 그리면 여우가 나무보다 큰 숲이 된다. 값 옆은 실제 렌더 결과(px).
-/// 숲 팩 13종 중 11종만 반입 — bridge(물이 없다)·fence(가로 1세그먼트라 경계로 못 쓴다) 제외.
-const _propSize = <String, double>{
-  'forest-tree': 132, // 45×78  (여우 34×40 의 약 2배 높이)
-  'forest-tree-high': 150, // 38×87  (좁고 큰 침엽수)
-  'forest-rocks-high': 76, // 62×76
-  'forest-rocks-low': 60, 'forest-rocks-ramp': 60,
-  'forest-tent': 84, // 68×64  (사람 36×40 보다 크게)
-  'forest-flag': 72, 'forest-plant': 44, 'forest-stones': 40,
-  'forest-patch-grass': 96, 'forest-patch-dirt': 88,
-};
-
-/// 뒷숲 추첨 풀 — 나무가 두 번 들어가 흔한 쪽으로 기운다(숲이니까).
-const _backKinds = [
-  'forest-tree', 'forest-tree-high', 'forest-rocks-high',
-  'forest-tree', 'forest-rocks-ramp', 'forest-tree-high',
-];
-
-/// 콩콩 파형(0..1, 위로) — 한 위상에 두 번. [_Critter] 와 숲 씬의 발밑 그림자가 같이 쓴다.
-double hopWave(double phase) => math.sin(phase * 2 * math.pi).abs();
-
-/// 씬 배치용 결정론 해시 — [agentColor]·[agentSprite]·[personSprite] 와 같은 h*31+c 규약.
-/// [salt] 로 같은 키에서 독립된 값을 여러 개 뽑는다(x·y·종류). 폴링마다 숲이 춤추지 않게.
-int _sceneHash(String key, int salt) {
-  var h = salt & 0x7fffffff;
-  for (final c in key.codeUnits) {
-    h = (h * 31 + c) & 0x7fffffff;
-  }
-  return h;
-}
-
-double _sceneRand(String key, int salt) => (_sceneHash(key, salt) % 10007) / 10007.0;
-
-/// 배경 소품 1개. [flat] = 바닥 얼룩(중심 앵커), 아니면 발밑 앵커([_footInset]).
-class _Prop {
-  final String sprite;
-  final Offset at;
-  final double size;
-  final bool flat;
-  const _Prop(this.sprite, this.at, this.size, {this.flat = false});
-}
-
-/// 세션 1개 = 세로 열 1개. 사람은 빈터 **위**에 고정, 동물은 빈터([play]) 안에서만 논다.
-class _Clearing {
-  final String sessionId, sprite; // sprite = personSprite(sessionId)
-  final Offset personFeet;
-  final Rect play;
-  const _Clearing({
-    required this.sessionId,
-    required this.sprite,
-    required this.personFeet,
-    required this.play,
-  });
-}
-
-/// 씬 안의 동물 한 마리 = 도는 서브 1개. [run] 은 폴링마다 갈리지만 위치·기분은 이어진다.
-class _Beast {
-  final String agentId, sprite; // 'animal-fox' — agentSprite 로 1회 결정
-  final Color color; // agentColor(agentType)
-  AgentRun run; // 폴링마다 교체(final 아님)
-  String sessionId;
-  Offset pos = Offset.zero, target = Offset.zero;
-  double speed = 0, hopHz = 0, arrive = _arriveWander, rest = 0, until = 0;
-  double phase = 0; // 0..1 — **개체별 누적**. 공유 위상이면 전원이 같은 박자로 뛴다(로봇)
-  double fade = 1;
-  bool moving = false, leaving = false, hovered = false, placed = false;
-  String? chaseId; // 살아있는 추격 목표. null = 고정 목표점
-
-  _Beast({
-    required this.agentId,
-    required this.sprite,
-    required this.color,
-    required this.run,
-    required this.sessionId,
-  });
-}
-
-/// 숲 씬의 모델 — 위젯을 모른다(순수 계산 + Listenable). 소유자는 [_ForestSceneState].
-///
-/// [tick] 만 notify 한다. [resize]·[sync] 는 빌드/레이아웃 중에 불려서 notify 하면
-/// "setState during build" 로 죽는다.
-class _ForestScene extends ChangeNotifier {
-  final _beasts = <String, _Beast>{};
-  final _byId = <String, _Clearing>{}; // sessionId → 빈터
-  final _rnd = math.Random(); // 움직임·종·색(등장마다 섞임)은 결정론이 아니다 — 사람만 해시로 고정한다
-  Map<String, AgentRun> _mainOf = const {}; // sessionId → 지금 도는 메인(사람이 하는 일)
-
-  /// sessionId → 최신 ai-title. **붙잡아 둔다** — 메인 세션 파일은 서브가 도는 동안 안 쓰여서
-  /// mtime 창을 들락거린다. 매번 [_mainOf] 에서 읽으면 이름표가 제목 ↔ 세션ID 로 깜빡인다.
-  final _titleOf = <String, String>{};
-
-  /// sessionId → 마지막으로 본 메인 실행. [_titleOf] 와 같은 이유로 **붙잡아 둔다** — 사람을
-  /// 클릭했을 때 그 세션의 상세 로그를 열 filePath 가 필요한데, 서브가 도는 동안 메인이 창 밖으로
-  /// 빠져 [_mainOf] 가 비어도 클릭은 먹혀야 한다(마지막 본 실행의 경로로 파일을 다시 읽는다).
-  final _mainRunOf = <String, AgentRun>{};
-
-  List<String> _sessions = const [];
-  Size _size = Size.zero;
-  Duration _last = Duration.zero;
-
-  double clock = 0;
-  List<_Clearing> clearings = const [];
-  List<_Prop> floor = const [], back = const []; // 배경 — 리사이즈/세션 변화 때만 갱신
-  int hidden = 0;
-  double sceneW = 0, colW = 0;
-
-  Iterable<_Beast> get beasts => _beasts.values;
-
-  /// 이 마리가 노는 빈터 — 뷰가 원근 스케일(깊이)을 계산할 때 쓴다.
-  _Clearing? clearingOf(String sessionId) => _byId[sessionId];
-
-  /// 이 세션의 메인이 지금 도는 중이면 그 실행 — 사람 머리 위 도구 칩의 재료.
-  /// null = 사람은 서 있지만 조용하다(서브만 돌거나, 메인이 60초 넘게 아무것도 안 썼다).
-  AgentRun? mainOf(String sessionId) => _mainOf[sessionId];
-
-  /// 이 세션의 사람이 읽는 제목(최신 ai-title). null = 아직 한 번도 못 봤다 → 세션ID 폴백.
-  String? titleOf(String sessionId) => _titleOf[sessionId];
-
-  /// 이 세션 사람을 클릭했을 때 상세를 읽을 메인 실행. null = 이 열이 사는 동안 메인을 한 번도
-  /// 라이브로 못 봤다(앱을 팬아웃 도중 열어 메인이 창 밖) → 클릭 비활성, 다음 폴링에 낫는다.
-  AgentRun? mainRunOf(String sessionId) => _mainRunOf[sessionId];
-
-  /// 창 크기 변화 — [LayoutBuilder] 안에서 부른다. **notify 금지**.
-  void resize(Size s) {
-    if (s == _size) return;
-    _size = s;
-    _relayout();
-  }
-
-  /// 폴링 결과를 맞춘다 — 위치·기분은 그대로 두고 목록만. **notify 금지**.
-  void sync(List<AgentRun> runs) {
-    // 메인 세션은 사람이라 동물로 만들지 않는다(agentSprite 해시를 타면 안 된다) —
-    // 서브와 갈리는 지점은 씬 전체에서 여기 하나뿐이고, 아래는 전부 서브(동물) 얘기다.
-    final mains = <String, AgentRun>{};
-    final subs = <AgentRun>[];
-    for (final r in runs) {
-      if (r.agentType == mainAgentType) {
-        mains[r.sessionId] = r;
-      } else {
-        subs.add(r);
-      }
-    }
-    _mainOf = mains;
-    for (final r in mains.values) {
-      if (r.description.isNotEmpty) _titleOf[r.sessionId] = r.description;
-      _mainRunOf[r.sessionId] = r; // 클릭 대상 filePath 확보(창 밖으로 빠져도 남는다)
-    }
-
-    // 48 상한. startedAt 오름차순 = 폴링마다 집합이 안 흔들리는 안정 기준.
-    final shown = subs..sort((a, b) => a.startedAt.compareTo(b.startedAt));
-    hidden = math.max(0, shown.length - _beastMax);
-    if (hidden > 0) shown.removeRange(_beastMax, shown.length);
-
-    final live = <String>{};
-    for (final r in shown) {
-      live.add(r.agentId);
-      final b = _beasts[r.agentId];
-      if (b == null) {
-        // 키는 agentId — 폴링은 매번 새 AgentRun 을 만들어서 객체 동일성으로 맞추면
-        // 2초마다 전원이 리셋된다.
-        _beasts[r.agentId] = _Beast(
-          agentId: r.agentId,
-          sprite: randomAnimalSprite(_rnd), // 등장마다 새로 섞는다(사용자 요구)
-          color: randomAgentColor(_rnd), // 색도 같은 규약 — 종과 독립 추첨
-          run: r,
-          sessionId: r.sessionId,
-        );
-      } else {
-        b.run = r;
-        b.sessionId = r.sessionId;
-        // isRunning 은 "마지막 레코드 60초 이내" 추정이라 false↔true 로 튄다 → 다시
-        // 나타나면 사라지던 마리를 되살린다(안 그러면 사라졌다 나타난다).
-        b.leaving = false;
-        b.fade = 1;
-      }
-    }
-    for (final b in _beasts.values) {
-      if (!live.contains(b.agentId)) b.leaving = true;
-    }
-
-    // 열 = 지금 **마리가 있는** 세션 ∪ **메인이 도는** 세션. 사라지는 중(leaving)인 마리도
-    // 제 빈터에서 마저 페이드해야 해서 runs 가 아니라 _beasts 에서 뽑는다 — 이 덕에 "모든 마리는
-    // 제 빈터를 갖는다" 가 불변식이 된다(마지막 한 마리가 빠진 열은 다음 폴링에 접힌다).
-    // 메인을 더하는 게 요구의 핵심이다: 서브 없이 프롬프트만 돌아도(= 동물 0마리) 열이 서고
-    // 사람이 캠프에 선다.
-    final ids = <String>{
-      for (final b in _beasts.values) b.sessionId,
-      for (final r in mains.values) r.sessionId,
-    };
-    final sessions = ids.toList()..sort(); // readLive 는 mtime 순 → 정렬 안 하면 2초마다 사람이 자리를 바꾼다
-    _titleOf.removeWhere((sid, _) => !ids.contains(sid)); // 열이 접히면 제목도 버린다
-    _mainRunOf.removeWhere((sid, _) => !ids.contains(sid)); // 제목과 같은 생명주기
-    // 열 구성이 그대로면(대개 그렇다) 열·소품을 다시 계산하지 않는다 — 2초마다 숲이 춤추지 않게.
-    // 이미 깔린 것(_byId)과 비교하므로 크기가 0이라 걸러진 레이아웃도 다음 기회에 스스로 낫는다.
-    if (sessions.length == _byId.length && sessions.every(_byId.containsKey)) {
-      _spawnNew(); // 열 그대로 — 새로 뜬 마리만 세운다
-    } else {
-      _sessions = sessions;
-      _relayout();
-    }
-  }
-
-  /// 매 프레임 — **유일한 notify**.
-  void tick(Duration elapsed) {
-    // dt 상한 필수: 창을 숨기면 엔진이 프레임을 끊어(hidden·paused·detached) 복귀 시
-    // elapsed 가 수 초 점프한다 → 없으면 전원 순간이동.
-    final dt = ((elapsed - _last).inMicroseconds / 1e6).clamp(0.0, _maxDt);
-    _last = elapsed;
-    clock += dt;
-    for (final b in _beasts.values) {
-      final c = _byId[b.sessionId];
-      if (c != null) _step(b, dt, c);
-    }
-    _beasts.removeWhere((_, b) => b.leaving && b.fade <= 0);
-    notifyListeners();
-  }
-
-  void _step(_Beast b, double dt, _Clearing c) {
-    if (b.leaving) {
-      b.fade -= dt / _fadeOut;
-      return;
-    }
-    if (b.hovered) {
-      b.moving = false; // 호버하면 멈춘다 — 움직이는 걸 툴팁으로 읽을 수 없다
-      return;
-    }
-    if (b.moving) b.phase = (b.phase + dt * b.hopHz) % 1.0;
-    if (b.rest > 0) {
-      b.rest -= dt;
-      b.moving = false;
-      return;
-    }
-    if (b.chaseId != null) {
-      // 스냅샷이 아니라 라이브 추적 = 진짜로 쫓아간다
-      final t = _beasts[b.chaseId];
-      if (t == null || t.leaving) {
-        _pick(b, c);
-        return;
-      }
-      b.target = t.pos;
-    }
-    final d = b.target - b.pos, dist = d.distance;
-    if (dist <= b.arrive) {
-      _pick(b, c);
-      return;
-    }
-    b.pos += d * (math.min(b.speed * dt, dist) / dist); // min → 오버슛(=떨림) 원천 봉쇄
-    b.moving = true;
-    b.until -= dt;
-    if (b.until <= 0) _pick(b, c); // 안전망: 못 잡는 추격을 6초에 끊는다
-  }
-
-  /// 다음 놀이 — 쉬기 20% / 친구 쫓기 25%(혼자면 어슬렁) / 어슬렁 55%.
-  ///
-  /// 목표점이 항상 [play](볼록) 안이라 직선 이동은 밖으로 못 나간다 → 경계 반사·클램프 코드가
-  /// 통째로 필요 없다. `pos ∈ play` 를 깨는 건 리사이즈뿐이고 그건 [_relayout] 이 잡는다.
-  void _pick(_Beast b, _Clearing c) {
-    b.chaseId = null;
-    final r = _rnd.nextDouble();
-    if (r < 0.20) {
-      b.moving = false;
-      b.hopHz = 0;
-      b.rest = _restMin + _rnd.nextDouble() * _restVar;
-      return;
-    }
-    if (r < 0.45) {
-      final friends = [
-        for (final o in _beasts.values)
-          if (!o.leaving && o.agentId != b.agentId && o.sessionId == b.sessionId) o
-      ];
-      if (friends.isNotEmpty) {
-        final t = friends[_rnd.nextInt(friends.length)];
-        b
-          ..chaseId = t.agentId
-          ..target = t.pos
-          ..speed = _speedChase + _rnd.nextDouble() * _speedChaseVar
-          ..hopHz = _bobHzChase
-          ..arrive = _arriveChase
-          ..until = _repick
-          ..moving = true;
-        return;
-      }
-    }
-    b
-      ..target = Offset(c.play.left + _rnd.nextDouble() * c.play.width,
-          c.play.top + _rnd.nextDouble() * c.play.height)
-      ..speed = _speedWander + _rnd.nextDouble() * _speedWanderVar
-      ..hopHz = _bobHzWander
-      ..arrive = _arriveWander
-      ..until = _repick
-      ..moving = true;
-  }
-
-  /// 새로 뜬 마리는 제 사람 발밑에서 튀어나온다 — "이 세션이 얘를 띄웠다" 가 공짜 서사.
-  void _spawnNew() {
-    for (final b in _beasts.values) {
-      if (b.placed) continue;
-      final c = _byId[b.sessionId];
-      if (c == null) continue; // 아직 레이아웃 전 — 첫 resize 가 다시 부른다
-      b.pos = c.personFeet +
-          Offset((_rnd.nextDouble() - 0.5) * _spawnJitter * 2,
-              _rnd.nextDouble() * _spawnJitter);
-      b.phase = _rnd.nextDouble(); // 같이 튀어나온 마리들이 한 박자로 뛰지 않게
-      b.placed = true;
-      _pick(b, c);
-    }
-  }
-
-  /// 열·사람 앵커·소품 재계산 + `pos ∈ play` 복구. 리사이즈/세션 변화에서만.
-  void _relayout() {
-    final n = _sessions.length;
-    if (n == 0 || _size.isEmpty) {
-      clearings = const [];
-      floor = const [];
-      back = const [];
-      _byId.clear();
-      sceneW = 0;
-      colW = 0;
-      return;
-    }
-    sceneW = math.max(_size.width, n * _minColW); // 좁으면 씬을 넓히고 가로 스크롤
-    colW = sceneW / n;
-    final feetY = (_size.height * 0.26).clamp(76.0, 120.0);
-    final cs = <_Clearing>[];
-    final fl = <_Prop>[], bk = <_Prop>[];
-    for (int i = 0; i < n; i++) {
-      final sid = _sessions[i]; // 시드 = sessionId(불변) — project 시드는 폴링마다 숲을 재배치한다
-      final colLeft = colW * i;
-      final personFeet = Offset(colW * (i + 0.5), feetY);
-      final play = Rect.fromLTRB(
-        colLeft + _padX,
-        feetY + _playTopGap,
-        colLeft + colW - _padX,
-        math.max(feetY + _playTopGap + 60, _size.height - _playPadBottom),
-      );
-      cs.add(_Clearing(
-        sessionId: sid,
-        sprite: personSprite(sid),
-        personFeet: personFeet,
-        play: play,
-      ));
-
-      // 1) 뒷숲 — 열을 슬롯으로 쪼개 칸마다 1개(해시로 그냥 뿌리면 뭉친다). 거절 샘플링 없음 = 무한루프 0.
-      final slots = (colW / 120).round().clamp(3, 8);
-      for (int k = 0; k < slots; k++) {
-        final sx = colLeft +
-            20 +
-            (colW - 40) * (k + .5) / slots +
-            (_sceneRand(sid, 100 + k * 3) - .5) * 30;
-        if ((sx - personFeet.dx).abs() < 96) continue; // 캠프 자리는 비운다 = 빈터 입구
-        final kind = _backKinds[_sceneHash(sid, 101 + k * 3) % _backKinds.length];
-        // 발밑 y ∈ [feetY*0.66, feetY*0.96] — 이보다 위면 132px 나무의 우듬지가 씬 밖으로 잘린다.
-        bk.add(_Prop(
-          kind,
-          Offset(sx, feetY * (0.66 + _sceneRand(sid, 102 + k * 3) * 0.30)),
-          _propSize[kind]!,
-        ));
-      }
-
-      // 2) 캠프 — 해시 안 씀. 모든 세션이 같은 모양이어야 '캠프' 라는 기호로 읽힌다.
-      fl.add(_Prop('forest-patch-dirt', personFeet - const Offset(0, 4), 88, flat: true));
-      bk.add(_Prop('forest-tent', personFeet + const Offset(-56, -2), 84));
-      bk.add(_Prop('forest-flag', personFeet + const Offset(46, 0), 72));
-
-      // 3) 바닥 얼룩 + 소형 장식 — 놀이터 안엔 납작하거나 아주 작은 것만(세로 소품은 전부
-      //    놀이터 밖이라 소품↔동물 y-sort 가 아예 필요 없다 = 배경을 정적 레이어로 격리).
-      final m = (play.width * play.height / 26000).round().clamp(3, 9);
-      for (int k = 0; k < m; k++) {
-        final kind = _sceneRand(sid, 300 + k * 3) < 0.72
-            ? 'forest-patch-grass'
-            : 'forest-patch-dirt';
-        fl.add(_Prop(kind, _inPlay(sid, play, 301 + k * 3), _propSize[kind]!, flat: true));
-      }
-      final q = (play.width / 240).round().clamp(2, 4);
-      for (int k = 0; k < q; k++) {
-        final kind =
-            _sceneRand(sid, 500 + k * 3) < 0.5 ? 'forest-plant' : 'forest-stones';
-        bk.add(_Prop(kind, _inPlay(sid, play, 501 + k * 3), _propSize[kind]!));
-      }
-    }
-    clearings = cs;
-    floor = fl;
-    back = bk;
-    _byId
-      ..clear()
-      ..addEntries(cs.map((c) => MapEntry(c.sessionId, c)));
-
-    for (final b in _beasts.values) {
-      final c = _byId[b.sessionId];
-      if (c == null || !b.placed) continue;
-      b.pos = Offset(b.pos.dx.clamp(c.play.left, c.play.right),
-          b.pos.dy.clamp(c.play.top, c.play.bottom));
-      b.until = 0; // 전원 즉시 재추첨 — 목표가 새 빈터 밖에 남으면 가장자리에 붙어 선다
-    }
-    _spawnNew();
-  }
-
-  /// [play] 안의 결정론 좌표 — [salt], [salt]+1 두 개를 쓴다.
-  Offset _inPlay(String sid, Rect play, int salt) => Offset(
-        play.left + _sceneRand(sid, salt) * play.width,
-        play.top + _sceneRand(sid, salt + 1) * play.height,
-      );
-}
 
 /// 숲 씬 — [Ticker] 1개로 모델을 굴리고 위젯 트리로 그린다.
 ///
@@ -1843,7 +1302,7 @@ class _ForestSceneView extends StatefulWidget {
 
 class _ForestSceneState extends State<_ForestSceneView>
     with SingleTickerProviderStateMixin {
-  final _ForestScene _scene = _ForestScene();
+  final ForestScene _scene = ForestScene();
   late final Ticker _ticker = createTicker(_scene.tick);
 
   @override
@@ -1858,7 +1317,7 @@ class _ForestSceneState extends State<_ForestSceneView>
     super.didChangeDependencies();
     // 소품만 미리 디코딩 — 배경은 첫 프레임에 통째로 깔려 팝인이 눈에 띈다. 동물은 2초 폴링
     // 경계에 하나씩 등장해 1프레임 팝인이 안 보인다.
-    for (final sprite in _propSize.keys) {
+    for (final sprite in propSize.keys) {
       precacheImage(AssetImage('assets/agents/$sprite.png'), context);
     }
   }
@@ -1897,6 +1356,9 @@ class _ForestSceneState extends State<_ForestSceneView>
                   back: _scene.back,
                   colW: _scene.colW,
                   cols: _scene.clearings.length,
+                  // bool 하나만 — clock 같은 프레임 단위 입력을 넘기면 배경이 60fps 로
+                  // 리페인트돼 RepaintBoundary 로 격리한 의미가 사라진다.
+                  night: isNightAt(DateTime.now()),
                 ),
               ),
               RepaintBoundary(
@@ -1919,12 +1381,16 @@ class _ForestSceneState extends State<_ForestSceneView>
 
   /// 캐릭터 층 — 사람(y 가 늘 최소라 맨 뒤) 다음 동물을 pos.dy 오름차순으로.
   Widget _characters() {
-    final ws = _scene.beasts.where((b) => b.fade > 0).toList()
+    // 빈터 없는 마리(= 포커스로 가려진 열)는 여기서 걸러야 [labelMax] 판정이 정직해진다 —
+    // 안 그리는 마리까지 세면 세 마리만 보이는 포커스 뷰에서 이름표가 꺼진다.
+    final ws = _scene.beasts
+        .where((b) => b.fade > 0 && _scene.clearingOf(b.sessionId) != null)
+        .toList()
       ..sort((a, b) {
         final c = a.pos.dy.compareTo(b.pos.dy);
         return c != 0 ? c : a.agentId.compareTo(b.agentId); // List.sort 는 불안정 — 동률 깜빡임 방지
       });
-    final label = ws.length <= _labelMax; // 넘으면 글자 수프 — 칩·호버·탭은 그대로 남는다
+    final label = ws.length <= labelMax; // 넘으면 글자 수프 — 칩·호버·탭은 그대로 남는다
     return Stack(
       children: [
         for (int i = 0; i < _scene.clearings.length; i++)
@@ -1935,6 +1401,14 @@ class _ForestSceneState extends State<_ForestSceneView>
             main: _scene.mainOf(_scene.clearings[i].sessionId),
             mainRun: _scene.mainRunOf(_scene.clearings[i].sessionId),
             title: _scene.titleOf(_scene.clearings[i].sessionId),
+            // 이름표 클릭 = 이 세션만 크게. 사람 클릭은 이미 상세 로그라 슬롯이 갈린다.
+            // 열이 하나뿐이면 누를 이유가 없다(포커스 중엔 나가는 길이라 늘 살아 있다).
+            onFocus: _scene.canFocus || _scene.focus != null
+                ? () => _scene.setFocus(_scene.focus == null
+                    ? _scene.clearings[i].sessionId
+                    : null)
+                : null,
+            focused: _scene.focus != null,
           ),
         for (final b in ws) _cell(b, label),
         if (_scene.hidden > 0)
@@ -1953,25 +1427,42 @@ class _ForestSceneState extends State<_ForestSceneView>
               ),
             ),
           ),
+        // 나가는 길 — 포커스 중엔 다른 열이 아예 없어서 이름표 말고 여기로도 돌아온다.
+        if (_scene.focus != null)
+          Positioned(
+            top: 8,
+            left: 8,
+            child: _PlateButton(
+              label: '← 전체 보기',
+              onTap: () => _scene.setFocus(null),
+            ),
+          ),
       ],
     );
   }
 
   /// 마리 1개 = Stack 직계 [Positioned]. **key 필수** — 없으면 정렬이 바뀔 때 Stack 이
   /// 인덱스로 매칭해 다른 마리의 Element(호버·툴팁 상태)를 물려받는다.
-  Widget _cell(_Beast b, bool label) {
+  Widget _cell(Beast b, bool label) {
     final c = _scene.clearingOf(b.sessionId);
     if (c == null) return const SizedBox.shrink(); // sync 가 마리마다 빈터를 보장한다
     final t = ((b.pos.dy - c.play.top) / c.play.height).clamp(0.0, 1.0);
-    final size = _animalSize * (_depthMin + _depthSpan * t); // 48..59 — 아래(가까움)일수록 큼
+    // 48..59(원근) × 성장(1.0~growthCap) — 많이 뱉은 마리가 눈에 띄게 크다.
+    // 포커스 중엔 한 열이 화면을 다 쓰니 마리도 그만큼 키운다(그게 "키워 보기" 의 본체).
+    final base = _scene.focus == null ? animalSize : animalSize * 1.3;
+    final size =
+        base * (depthMin + depthSpan * t) * growthScale(b.run.outputTokens);
     return Positioned(
       key: ValueKey(b.agentId),
-      left: b.pos.dx - _cellW / 2,
-      top: b.pos.dy - _groundY,
-      width: _cellW,
-      height: _cellH,
+      left: b.pos.dx - cellW / 2,
+      top: b.pos.dy - groundY,
+      width: cellW,
+      height: cellH,
       child: _SceneCritter(
         b: b,
+        clock: _scene.clock,
+        thinking: _scene.thinking(b),
+        crowned: _scene.crownId == b.agentId,
         size: size,
         label: label,
         onHover: (v) => b.hovered = v, // 다음 tick 이 읽는다 — setState 불필요
@@ -1983,28 +1474,37 @@ class _ForestSceneState extends State<_ForestSceneView>
 /// 정적 배경 — 땅 + 열 명암 + 바닥 얼룩 + 뒷숲/캠프. 세로 소품은 전부 놀이터 밖이라
 /// 동물과 y-sort 할 일이 없다 → 리사이즈 때만 다시 그린다.
 class _Backdrop extends StatelessWidget {
-  final List<_Prop> floor, back;
+  final List<SceneProp> floor, back;
   final double colW;
   final int cols;
+
+  /// 밤이면 하늘이 어두워지고 별이 뜬다. **bool 하나뿐인 게 중요하다** — 프레임 단위 값을
+  /// 받는 순간 이 정적 레이어가 60fps 로 리페인트된다.
+  final bool night;
+
   const _Backdrop({
     required this.floor,
     required this.back,
     required this.colW,
     required this.cols,
+    required this.night,
   });
 
   @override
   Widget build(BuildContext context) {
     return DecoratedBox(
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [_skyTop, _skyBottom],
+          colors: night
+              ? const [_skyTopNight, _skyBottomNight]
+              : const [_skyTop, _skyBottom],
         ),
       ),
       child: Stack(
         children: [
+          if (night) const Positioned.fill(child: CustomPaint(painter: _Stars())),
           // 열 구분선 대신 명암만 — 소속의 본체는 공간 격리 + 열 머리의 캠프다.
           for (int i = 1; i < cols; i += 2)
             Positioned(
@@ -2021,11 +1521,11 @@ class _Backdrop extends StatelessWidget {
     );
   }
 
-  Widget _prop(_Prop p) => Positioned(
+  Widget _prop(SceneProp p) => Positioned(
         left: p.at.dx - p.size / 2,
         top: p.flat
             ? p.at.dy - p.size / 2
-            : p.at.dy - _footInset(p.sprite) * p.size,
+            : p.at.dy - footInset(p.sprite) * p.size,
         width: p.size,
         height: p.size,
         // fit 필수 — Image 기본값은 BoxFit.scaleDown(축소만, 확대 안 함)이라 64px 원본이
@@ -2041,12 +1541,35 @@ class _Backdrop extends StatelessWidget {
       );
 }
 
+/// 밤하늘 별 — 위젯 수십 개가 아니라 [CustomPaint] 하나. 좌표는 고정 시드라 리사이즈해도
+/// 별자리가 그대로다(리페인트마다 새로 뿌리면 별이 반짝이는 게 아니라 춤춘다).
+class _Stars extends CustomPainter {
+  const _Stars();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rnd = math.Random(7); // 고정 시드 = 늘 같은 밤하늘
+    final n = (size.width / 14).round().clamp(30, 120); // 넓은 씬(여러 세션)일수록 많이
+    final paint = Paint();
+    for (var i = 0; i < n; i++) {
+      final x = rnd.nextDouble() * size.width;
+      final y = rnd.nextDouble() * size.height * 0.45; // 하늘 = 위쪽만(땅에 별이 박히지 않게)
+      paint.color =
+          Colors.white.withValues(alpha: 0.25 + rnd.nextDouble() * 0.5);
+      canvas.drawCircle(Offset(x, y), 0.6 + rnd.nextDouble() * 0.9, paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_Stars oldDelegate) => false; // 입력이 없다 = 다시 그릴 이유가 없다
+}
+
 /// 사람 1명 — 제 빈터 **위**에 고정. 동물은 빈터 안에서만 노니까 사람도 이름표도 안 가린다.
 ///
 /// [main] 이 있으면 = 메인 세션이 지금 일하는 중 → 이름표 옆에 지금 만지는 도구 칩을 단다
 /// (동물 머리 위 칩과 같은 기호). 동물이 0마리여도 이 사람은 선다.
 class _PersonStand extends StatelessWidget {
-  final _Clearing c;
+  final Clearing c;
   final double clock;
   final int index;
 
@@ -2057,6 +1580,14 @@ class _PersonStand extends StatelessWidget {
   /// 여기로 온다. null 이면 이 열이 사는 동안 메인을 한 번도 못 봐서 열 자체가 안 눌린다.
   final AgentRun? mainRun;
   final String? title;
+
+  /// 이름표를 누르면 이 세션만 크게 본다(포커스 중이면 전체로 복귀). null = 열이 하나뿐이라
+  /// 누를 이유가 없다.
+  final VoidCallback? onFocus;
+
+  /// 지금 포커스 모드인가 — 이름표가 "들어가기" 인지 "나가기" 인지 알려준다.
+  final bool focused;
+
   const _PersonStand({
     required this.c,
     required this.clock,
@@ -2064,6 +1595,8 @@ class _PersonStand extends StatelessWidget {
     required this.main,
     required this.mainRun,
     required this.title,
+    required this.onFocus,
+    required this.focused,
   });
 
   @override
@@ -2071,13 +1604,13 @@ class _PersonStand extends StatelessWidget {
     // 서 있되 죽어 있진 않게 — 아주 느린 숨(±1.5px). [index] 로 사람마다 위상을 어긋내
     // 여럿이 한 박자로 들썩이는 걸 막는다.
     final breathe = math.sin(clock * 0.9 + index * 1.7) * 1.5;
-    final spriteTop = _groundY - _footInset(c.sprite) * _personSize;
+    final spriteTop = groundY - footInset(c.sprite) * personSize;
     final tool = (main == null || main!.toolCalls.isEmpty) ? null : main!.toolCalls.last;
     return Positioned(
       left: c.play.left, // 열 폭 = 이름표가 잘리지 않을 만큼 넓다(personFeet 가 그 중앙)
-      top: c.personFeet.dy - _groundY,
+      top: c.personFeet.dy - groundY,
       width: c.play.width,
-      height: _cellH,
+      height: cellH,
       child: Stack(
         children: [
           Positioned(
@@ -2089,9 +1622,9 @@ class _PersonStand extends StatelessWidget {
           Positioned(
             left: 0,
             right: 0,
-            bottom: _cellH - spriteTop + 2, // 스프라이트 박스 바로 위(숨쉬어도 이름표는 안 흔들리게)
+            bottom: cellH - spriteTop + 2, // 스프라이트 박스 바로 위(숨쉬어도 이름표는 안 흔들리게)
             // 칩은 이름표와 한 줄 — 이름표가 이미 머리 위다. 따로 한 줄을 더 얹으면 열 머리가
-            // 씬 밖으로 나가 잘린다(사람 셀 top = feetY-_groundY 라 짧은 창에선 음수).
+            // 씬 밖으로 나가 잘린다(사람 셀 top = feetY-groundY 라 짧은 창에선 음수).
             child: Center(
               child: Row(
                 mainAxisSize: MainAxisSize.min,
@@ -2104,6 +1637,8 @@ class _PersonStand extends StatelessWidget {
                     child: _SessionPlate(
                       sessionId: c.sessionId,
                       title: title,
+                      onFocus: onFocus,
+                      focused: focused,
                     ),
                   ),
                 ],
@@ -2122,7 +1657,7 @@ class _PersonStand extends StatelessWidget {
       sprite: c.sprite,
       phase: 0,
       running: false, // 사람은 서 있는다 — 뛰는 건 동물뿐
-      size: _personSize,
+      size: personSize,
     );
     final run = mainRun;
     if (run == null) return sprite; // 아직 메인을 못 봤다 → 열 자체가 안 눌린다
@@ -2151,16 +1686,22 @@ class _PersonStand extends StatelessWidget {
 }
 
 /// 씬 안의 동물 한 마리 = 셀(104×106) 1개. 위에서부터 도구 칩 · 스프라이트 · 발밑 라벨,
-/// 그리고 지면선([_groundY])에 발밑 그림자. 셀 기하가 고정이라 원근 스케일이 변해도
+/// 그리고 지면선([groundY])에 발밑 그림자. 셀 기하가 고정이라 원근 스케일이 변해도
 /// 지면선이 안 흔들린다.
 class _SceneCritter extends StatelessWidget {
-  final _Beast b;
+  final Beast b;
+  final double clock; // 씬 시계 — 이모트 팝 진행도를 유도한다(위젯엔 타이머가 없다)
+  final bool thinking; // 💭 — 도구 소식이 한동안 없다(LLM 생각 중)
+  final bool crowned; // 👑 — 지금 output 토큰 최다
   final double size;
   final bool label;
   final ValueChanged<bool> onHover;
 
   const _SceneCritter({
     required this.b,
+    required this.clock,
+    required this.thinking,
+    required this.crowned,
     required this.size,
     required this.label,
     required this.onHover,
@@ -2170,17 +1711,36 @@ class _SceneCritter extends StatelessWidget {
   Widget build(BuildContext context) {
     final run = b.run;
     final cur = run.toolCalls.isEmpty ? null : run.toolCalls.last;
-    final spriteTop = _groundY - _footInset(b.sprite) * size;
+    final spriteTop = groundY - footInset(b.sprite) * size;
     final lift = b.moving ? hopWave(b.phase) : 0.0;
     final rw = size * 0.30 * (1 - 0.35 * lift); // 뛰어오르면 그림자가 작아져 '높이' 가 보인다
+    // 축하 진행도(0..1) — 일을 끝낸 마리만. 모델이 fade 를 이만큼 미뤄 준다.
+    final party = b.celebrateUntil > clock
+        ? 1 - (b.celebrateUntil - clock) / celebrateFor
+        : null;
     return Opacity(
       opacity: b.fade,
       child: Stack(
         children: [
+          // ⓪ 축하 별 — 스프라이트 중심에서 6방향으로 퍼지며 옅어진다. 마리당 6개 ×
+          //    celebrateFor(1.1초) 한정이라 상시구동에도 상한이 저절로 잡힌다.
+          if (party != null)
+            for (int i = 0; i < 6; i++)
+              Positioned(
+                left: cellW / 2 - 5 +
+                    math.cos(i * math.pi / 3) * party * 24,
+                top: spriteTop + size / 2 - 5 +
+                    math.sin(i * math.pi / 3) * party * 24,
+                child: Opacity(
+                  opacity: math.max(0.0, 1 - party),
+                  child: const Text('✦',
+                      style: TextStyle(fontSize: 10, height: 1, color: Color(0xFFFDE047))),
+                ),
+              ),
           // ① 발밑 그림자 — 타입색을 섞어 정체성을 땅에도 남긴다.
           Positioned(
-            left: _cellW / 2 - rw,
-            top: _groundY - rw * 0.35,
+            left: cellW / 2 - rw,
+            top: groundY - rw * 0.35,
             width: rw * 2,
             height: rw * 0.7,
             child: DecoratedBox(
@@ -2191,13 +1751,39 @@ class _SceneCritter extends StatelessWidget {
               ),
             ),
           ),
-          // ② 지금 만지는 도구 — 스무 마리가 각자 Bash/Read 를 달고 뛰는 게 이 씬의 맥박.
-          if (cur != null)
+          // ② 머리 위 슬롯 — 이모트(새 도구 호출 순간, [emoteFor] 수명) > 💭(생각 중) >
+          //    상시 도구 칩. 한 슬롯을 나눠 쓴다: 따로 얹으면 chipH(16px) 밖으로 나가
+          //    셀 기하가 깨진다.
+          if (b.emote != null)
             Positioned(
               left: 0,
               right: 0,
               top: 0,
-              height: _chipH,
+              height: chipH,
+              child: Center(
+                child: Transform.scale(
+                  scale: _emotePop(clock - b.emoteAt),
+                  child: Text(b.emote!,
+                      style: const TextStyle(fontSize: 12, height: 1)),
+                ),
+              ),
+            )
+          else if (thinking)
+            Positioned(
+              left: 0,
+              right: 0,
+              top: 0,
+              height: chipH,
+              child: const Center(
+                child: Text('💭', style: TextStyle(fontSize: 12, height: 1)),
+              ),
+            )
+          else if (cur != null)
+            Positioned(
+              left: 0,
+              right: 0,
+              top: 0,
+              height: chipH,
               child: Center(child: _ToolChip(tool: cur, color: b.color)),
             ),
           // ③ 스프라이트 — 제스처는 여기에만. 셀 전체에 걸면 투명 여백이 이웃의 클릭을 가로챈다.
@@ -2228,27 +1814,44 @@ class _SceneCritter extends StatelessWidget {
                       builder: (_) => _AgentLogSheet(
                           run: b.run, sprite: b.sprite, color: b.color),
                     ),
-                    child: _Critter(
-                      sprite: b.sprite,
-                      phase: b.phase,
-                      running: b.moving,
-                      size: size,
+                    // 😵(dizzy) 는 이모트 수명 동안 한 바퀴 — 각도는 clock 유도라 타이머가 없다.
+                    child: Transform.rotate(
+                      angle: b.dizzy
+                          ? (clock - b.emoteAt) / emoteFor * 2 * math.pi
+                          : 0,
+                      child: _Critter(
+                        sprite: b.sprite,
+                        phase: b.phase,
+                        running: b.moving,
+                        size: size,
+                      ),
                     ),
                   ),
                 ),
               ),
             ),
           ),
-          // ④ 동작 이름표 — 타입(workflow-subagent)이 아니라 **지금 무슨 일을 하는지**(지시)를
-          //    _labelMaxChars 자로 잘라 건다. 타입은 동물 종·발밑 그림자색이 이미 말하고,
+          // ④ 왕관 — 지금 제일 많이 뱉은 마리. 스프라이트 머리에 얹고 [lift] 로 같이 뛴다
+          //    (안 그러면 콩콩 뛸 때 왕관만 공중에 남는다).
+          if (crowned)
+            Positioned(
+              left: 0,
+              right: 0,
+              top: spriteTop + size * 0.04 - lift * 4,
+              child: const Center(
+                child: Text('👑', style: TextStyle(fontSize: 11, height: 1)),
+              ),
+            ),
+          // ⑤ 동작 이름표 — 타입(workflow-subagent)이 아니라 **지금 무슨 일을 하는지**(지시)를
+          //    labelMaxChars 자로 잘라 건다. 타입은 동물 종·발밑 그림자색이 이미 말하고,
           //    사람이 궁금한 건 "이 마리가 뭘 하나" 다. 전문은 탭하면 상세 로그 맨 앞에.
-          //    슬롯이 지면선~셀 바닥 딱 _labelH — 여기서 내리면 셀 밖이라 Stack 이 말없이 자른다.
+          //    슬롯이 지면선~셀 바닥 딱 labelH — 여기서 내리면 셀 밖이라 Stack 이 말없이 자른다.
           if (label)
             Positioned(
               left: 0,
               right: 0,
-              top: _groundY,
-              height: _labelH,
+              top: groundY,
+              height: labelH,
               child: Center(
                 child: DecoratedBox(
                   decoration: BoxDecoration(
@@ -2279,6 +1882,15 @@ class _SceneCritter extends StatelessWidget {
   }
 }
 
+/// 이모트 팝 스케일 — 0.15s 에 0→1.25 로 튀고 1.0 으로 가라앉다 끝 0.2s 에 줄며 사라진다.
+/// 입력은 발화 후 경과(초). 수명([emoteFor])은 모델(tick)이 끊으므로 여기는 모양만.
+double _emotePop(double t) {
+  if (t < 0.15) return 1.25 * t / 0.15;
+  if (t < 0.3) return 1.25 - 0.25 * (t - 0.15) / 0.15;
+  final left = emoteFor - t;
+  return left < 0.2 ? math.max(0.0, left / 0.2) : 1.0;
+}
+
 /// 사람 이름표 — 이 메인(부모)이 무슨 일을 하는지/어디서인지.
 ///
 /// [title] 은 그 세션의 최신 `ai-title`(사람이 읽는 제목). 없는 세션도 있어서(실측)
@@ -2286,18 +1898,29 @@ class _SceneCritter extends StatelessWidget {
 class _SessionPlate extends StatelessWidget {
   final String sessionId;
   final String? title;
+
+  /// 누르면 이 세션만 크게 / 전체로 복귀. null = 열이 하나뿐 → 그냥 이름표.
+  final VoidCallback? onFocus;
+  final bool focused;
+
   const _SessionPlate({
     required this.sessionId,
     required this.title,
+    this.onFocus,
+    this.focused = false,
   });
 
   @override
   Widget build(BuildContext context) {
     final shortId = sessionId.length > 8 ? sessionId.substring(0, 8) : sessionId;
-    return DecoratedBox(
+    final plate = DecoratedBox(
       decoration: BoxDecoration(
         color: _plateBg,
         borderRadius: BorderRadius.circular(5),
+        // 누를 수 있다는 유일한 힌트 — 아이콘을 얹으면 좁은 열에서 제목을 먹는다.
+        border: onFocus == null
+            ? null
+            : Border.all(color: Colors.white.withValues(alpha: 0.18)),
       ),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
@@ -2306,6 +1929,51 @@ class _SessionPlate extends StatelessWidget {
           maxLines: 1,
           overflow: TextOverflow.ellipsis, // ai-title 은 열 폭보다 길 수 있다
           style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
+        ),
+      ),
+    );
+    final tap = onFocus;
+    if (tap == null) return plate;
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: Tooltip(
+        waitDuration: const Duration(milliseconds: 250),
+        message: focused ? '전체 숲으로 돌아가기' : '이 세션만 크게 보기',
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: tap,
+          child: plate,
+        ),
+      ),
+    );
+  }
+}
+
+/// 씬 위에 뜨는 작은 버튼 — 이름표와 같은 판때기 톤(숲 위에 UI 를 덜 얹는다).
+class _PlateButton extends StatelessWidget {
+  final String label;
+  final VoidCallback onTap;
+  const _PlateButton({required this.label, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: _plateBg,
+            borderRadius: BorderRadius.circular(9),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            child: Text(label,
+                style: const TextStyle(
+                    fontSize: 11, fontWeight: FontWeight.w600)),
+          ),
         ),
       ),
     );

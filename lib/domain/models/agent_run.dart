@@ -8,7 +8,10 @@ class ToolCall {
   /// 인자 요약 — 파일 경로는 마지막 2 세그먼트, 그 외는 한 줄로 접어 자른 것. 없으면 ''.
   final String detail;
 
-  const ToolCall(this.name, this.detail);
+  /// 이 호출의 `tool_result` 가 `is_error:true` 로 돌아왔나 — 숲 씬 실패 리액션의 신호.
+  final bool isError;
+
+  const ToolCall(this.name, this.detail, {this.isError = false});
 }
 
 /// 상세 로그 한 줄 — 사람이 준 지시([isPrompt]) 이거나, 에이전트가 쓴 텍스트([tool] == null)

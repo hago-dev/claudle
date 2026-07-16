@@ -26,6 +26,7 @@ String _assistantLine(
   int input = 0,
   int output = 0,
   String text = 'ok',
+  List<String>? ids, // tool_use 의 id(실측 존재) — tool_result 매칭 테스트용
 }) =>
     json.encode({
       'isSidechain': true,
@@ -39,14 +40,42 @@ String _assistantLine(
         'content': [
           {'type': 'thinking', 'thinking': '...'},
           {'type': 'text', 'text': text},
-          for (final (name, args) in tools)
-            {'type': 'tool_use', 'name': name, 'input': args},
+          for (final (i, (name, args)) in tools.indexed)
+            {
+              'type': 'tool_use',
+              if (ids != null) 'id': ids[i],
+              'name': name,
+              'input': args,
+            },
         ],
         'usage': {
           'input_tokens': input,
           'output_tokens': output,
           'cache_read_input_tokens': 999, // 모델에 없는 필드 → 무시돼야 함
         },
+      },
+    });
+
+/// 도구 결과 — `type:"user"` 줄의 content List 로 돌아온다(실측). `is_error:true` 가 실패 신호.
+String _toolResultLine(String agentId, String toolUseId, String ts,
+        {bool? isError}) =>
+    json.encode({
+      'isSidechain': true,
+      'agentId': agentId,
+      'type': 'user',
+      'uuid': 'r1',
+      'timestamp': ts,
+      'sessionId': 'sess-1',
+      'message': {
+        'role': 'user',
+        'content': [
+          {
+            'type': 'tool_result',
+            'tool_use_id': toolUseId,
+            'is_error': ?isError,
+            'content': 'boom',
+          },
+        ],
       },
     });
 
@@ -214,6 +243,46 @@ void main() {
       '',
       'echo hi && ls -al',
     ]);
+  });
+
+  test('tool_result 의 is_error 가 해당 ToolCall 에 isError 로 붙는다', () {
+    write(p.join(subagents, 'agent-err.jsonl'), [
+      _userLine('err', '에러 나는 작업', '2026-07-02T08:00:00.000Z'),
+      _assistantLine(
+        'err',
+        [
+          ('Bash', {'command': 'exit 1'}),
+          ('Read', {'file_path': '/a.dart'}),
+        ],
+        '2026-07-02T08:00:10.000Z',
+        ids: ['toolu_1', 'toolu_2'],
+      ),
+      _toolResultLine('err', 'toolu_1', '2026-07-02T08:00:11.000Z',
+          isError: true),
+      _toolResultLine('err', 'toolu_2', '2026-07-02T08:00:12.000Z',
+          isError: false),
+    ].join('\n'));
+
+    final tools = byId(reader().readAll(), 'err').toolCalls;
+    expect(tools.length, 2); // tool_result 줄이 새 ToolCall 을 만들면 안 된다
+    expect(tools[0].name, 'Bash');
+    expect(tools[0].isError, isTrue);
+    expect(tools[1].isError, isFalse);
+  });
+
+  test('is_error 필드 없음·무매칭 tool_use_id 는 전부 무해하다', () {
+    write(p.join(subagents, 'agent-hhh.jsonl'), [
+      _userLine('hhh', '평범한 작업', '2026-07-02T08:10:00.000Z'),
+      _assistantLine('hhh', [
+        ('Bash', {'command': 'ls'}),
+      ], '2026-07-02T08:10:05.000Z', ids: ['toolu_9']),
+      _toolResultLine('hhh', 'toolu_9', '2026-07-02T08:10:06.000Z'), // 필드 없음
+      _toolResultLine('hhh', 'toolu_ghost', '2026-07-02T08:10:07.000Z',
+          isError: true), // 무매칭 — 조용히 무시
+    ].join('\n'));
+
+    final tools = byId(reader().readAll(), 'hhh').toolCalls;
+    expect(tools.single.isError, isFalse);
   });
 
   test('워크플로우 서브에이전트: workflowId 추출', () {
