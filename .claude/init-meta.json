@@ -1,0 +1,35 @@
+{
+  "last_run": {
+    "init-skills": "2026-07-16T22:29:15+09:00",
+    "init-agents": "2026-07-16T22:40:00+09:00"
+  },
+  "detected_stacks": [
+    "flutter", "dart", "macos", "windows", "sqlite3", "no-state-lib",
+    "ci:github-actions", "pm:pub"
+  ],
+  "app": {
+    "platform": "flutter",
+    "architecture": "crossplatform-desktop",
+    "webview": false,
+    "platform_channel": false,
+    "push": false,
+    "deeplink": false,
+    "fastlane": false
+  },
+  "generated": {
+    "skills": [
+      "project-context", "conventions",
+      "dev-init", "lint", "test-run", "review", "debug", "security-check",
+      "gen-doc", "changelog", "git-summary", "refactor",
+      "app-context", "app-conventions", "app-build", "app-nav",
+      "app-signing", "app-icon-splash", "app-perf",
+      "ci-check"
+    ],
+    "agents": [
+      "code-reviewer", "debugger", "researcher", "security-auditor",
+      "planner", "red-team", "refactorer", "doc-generator",
+      "app-builder", "app-debugger", "app-reviewer", "app-deployer",
+      "devops-agent", "qa-scenario-writer"
+    ]
+  }
+}
