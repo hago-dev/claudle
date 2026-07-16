@@ -7,9 +7,14 @@
 #
 # 산출물: dist/Claudle-macOS-v<버전>.zip = Claudle/Claudle.app + 설치방법.txt
 #   (버전은 pubspec.yaml 의 version 에서 자동으로 읽는다 → 배포본 구분)
-# 기록:   release/v<버전> 브랜치 = 이 zip 이 어느 소스에서 나왔는지. dist/ 는 gitignore 라
-#         git 에 아무 흔적도 안 남고, 그래서 "이 버전 이미 냈나" 를 확인할 방법이 없었다.
-#         브랜치가 곧 그 기록이자 버전 재사용을 막는 가드다.
+# 기록:   v<버전> annotated 태그 = 이 zip 이 어느 소스에서 나왔는지. dist/ 는 gitignore 라
+#         git 에 아무 흔적도 안 남고, 그래서 "이 버전 이미 냈나" 를 확인할 방법이 없었다
+#         (실제로 내용이 다른 v1.2.0 을 두 번 만들어 앞 것을 날렸다, 2026-07-17).
+#         태그가 곧 그 기록이자 버전 재사용을 막는 가드다 — 문제가 생기면 `git checkout v<버전>`.
+#
+#         왜 브랜치가 아니라 태그인가: 기록은 **안 움직여야** 한다(브랜치는 커밋하면 따라
+#         움직인다). 이 레포가 이미 v1.0.x 를 그렇게 쓰고 있고, v* 태그 push 는 Windows CI
+#         까지 돌린다. 체크아웃 왕복도 필요 없다 — 트리가 이미 그 소스다(게이트 ①이 보장).
 # 사용: bash tool/release_adhoc.sh
 set -euo pipefail
 
@@ -23,7 +28,7 @@ VERSION="$(grep -E '^version:' pubspec.yaml | sed -E 's/^version:[[:space:]]*([0
 SRC="build/macos/Build/Products/Release/tokenbar.app"
 OUT="$ROOT/dist/Claudle-macOS-v${VERSION}.zip"
 README_SRC="$ROOT/tool/dist_readme_adhoc.txt"
-BRANCH="release/v${VERSION}"
+TAG="v${VERSION}"
 # STAGE(mktemp)는 게이트를 통과한 뒤에 잡는다 — 여기서 잡으면 임시폴더가 막혔을 때
 # 게이트 메시지도 못 보고 죽는다(샌드박스에서 실제로 그랬다).
 
@@ -41,14 +46,14 @@ if [ -n "$(git status --porcelain)" ]; then
   exit 1
 fi
 
-# ② 버전 재사용 — 브랜치가 있다 = 그 버전은 이미 냈다. 내용이 다른 같은 번호가 도는 걸 막는다.
-if git show-ref --verify --quiet "refs/heads/$BRANCH"; then
-  echo "ERROR: $BRANCH 가 이미 있다 → v$VERSION 은 이미 배포된 버전이다."
+# ② 버전 재사용 — 태그가 있다 = 그 버전은 이미 냈다. 내용이 다른 같은 번호가 도는 걸 막는다.
+if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+  echo "ERROR: 태그 $TAG 가 이미 있다 → v$VERSION 은 이미 배포된 버전이다."
   echo "       pubspec.yaml 의 version 과 windows/installer/claudle.iss 의 AppVersion 을"
   echo "       **함께** 새 버전으로 올려라(Inno 는 pubspec 을 안 읽는다)."
   echo ""
   echo "       의도적 재빌드라면 먼저 치워라:"
-  echo "         git branch -D $BRANCH && rm -f '$OUT'"
+  echo "         git tag -d $TAG && rm -f '$OUT'"
   exit 1
 fi
 
@@ -60,21 +65,12 @@ if [ -e "$OUT" ]; then
   exit 1
 fi
 
-# ── 릴리스 브랜치 ──────────────────────────────────────────────
-# 빌드는 release/v<버전> 위에서 하고, 끝나면(실패해도) 원래 브랜치로 돌아온다.
-# 빌드가 깨졌을 땐 브랜치를 남기지 않는다 — 남기면 재시도가 게이트 ②에 걸린다.
-ORIG_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
-BUILD_OK=0
-cleanup() {
-  git checkout --quiet "$ORIG_BRANCH" 2>/dev/null || true
-  [ "$BUILD_OK" = 1 ] || git branch -q -D "$BRANCH" 2>/dev/null || true
-}
-trap cleanup EXIT
+# 기록할 커밋 — 지금 HEAD 다. 체크아웃해서 빌드하고 돌아오는 왕복은 하지 않는다:
+# 게이트 ①이 트리를 클린으로 강제하므로 **지금 트리가 이미 그 소스**이고, 왕복은 아무것도
+# 바꾸지 않으면서 실패 시 엉뚱한 브랜치에 남을 위험만 만든다.
+COMMIT="$(git rev-parse --short HEAD)"
 
-echo "▶ 릴리스 브랜치 $BRANCH (끝나면 $ORIG_BRANCH 로 복귀)"
-git checkout --quiet -b "$BRANCH"
-
-echo "▶ 릴리스 빌드(유니버설)…"
+echo "▶ 릴리스 빌드(유니버설) — $TAG @ $COMMIT"
 fvm flutter build macos --release
 
 [ -d "$SRC" ] || { echo "ERROR: 릴리스 빌드 없음: $SRC"; exit 1; }
@@ -95,10 +91,13 @@ codesign --verify --deep --strict --verbose=2 "$APP"
 mkdir -p "$ROOT/dist"
 ditto -c -k --sequesterRsrc --keepParent "$STAGE" "$OUT"
 
-BUILD_OK=1   # 여기까지 왔으면 브랜치를 기록으로 남긴다(cleanup 이 안 지운다)
+# 기록은 **zip 이 나온 뒤에만** 남긴다 — 빌드가 깨졌는데 태그가 남으면 재시도가 게이트 ②에
+# 걸린다. annotated(-a)는 기존 v1.0.x 규약(`Claudle v<버전> — <요약>`)을 따른다.
+git tag -a "$TAG" -m "Claudle v$VERSION (macOS ad-hoc)"
 
 echo ""
 echo "✅ 완료: $OUT ($(du -h "$OUT" | cut -f1))"
-echo "   기록: $BRANCH (로컬 전용 — push 는 명시 요청 시에만)"
+echo "   기록: 태그 $TAG → $COMMIT (로컬 전용 — push 는 명시 요청 시에만)"
+echo "         문제가 생기면 그 소스로: git checkout $TAG"
 echo "   슬랙 전달 → 수령자는 /Applications 로 드래그 후 터미널에서:"
 echo "     xattr -dr com.apple.quarantine /Applications/Claudle.app"

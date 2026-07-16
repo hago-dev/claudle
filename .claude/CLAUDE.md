@@ -30,7 +30,7 @@ Flutter `3.41.2`(fvm 고정) / Dart SDK `^3.11.0` — **데스크톱 전용**(ma
 | /changelog | git log 기반 변경 이력 |
 | /git-summary | 커밋 메시지/PR 설명 생성 |
 | /refactor | 리팩토링 제안/실행 |
-| /app-build | macOS ad-hoc 서명 zip(공증 보류) / Windows Inno 설치파일 빌드. 배포는 커밋된 상태에서만 — `release/v<버전>` 브랜치가 기록이자 버전 재사용 가드 |
+| /app-build | macOS ad-hoc 서명 zip(공증 보류) / Windows Inno 설치파일 빌드. 배포는 커밋된 상태에서만 — `v<버전>` 태그가 기록이자 버전 재사용 가드(롤백: `git checkout v<버전>`) |
 | /app-nav | 새 화면 추가(Navigator.push) |
 | /app-signing | macOS 서명(공증 보류) / Windows 미서명 상태 |
 | /app-icon-splash | 트레이/앱 아이콘 파이프라인 |

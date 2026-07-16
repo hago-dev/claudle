@@ -31,7 +31,7 @@ allowed-tools:
 - 앱스토어 배포 아님 — macOS는 ad-hoc 서명 zip(공증 보류 — 상세 아래), Windows는 Inno Setup 설치파일(직접 배포).
 
 ## 빌드/서명/배포 현황 (요약 — 상세는 `/app-build`, `/app-signing`)
-- macOS: 서명·공증 **자동화 스크립트는 준비됨**(`tool/release_notarize.sh`, 팀 HAGO L&F INC) — 단 Developer ID Application 인증서 미보유(Account Holder만 발급 가능, `tool/release_notarize.md` STEP 1 미완)로 **공증 보류**, 인증서 없으면 스크립트가 첫 검사에서 중단. 현재 실배포는 `tool/release_adhoc.sh`의 ad-hoc 서명 zip(`dist/Claudle-macOS-v*.zip`) — 수령자가 `xattr -dr com.apple.quarantine` 필요. 스크립트가 배포 게이트 3종(더티 트리·버전 재사용·덮어쓰기)을 강제하고 `release/v<버전>` 브랜치를 기록으로 남긴다(`dist/`는 gitignore라 그 브랜치가 "이 zip이 어느 소스에서 나왔나"의 유일한 근거) — 상세는 `/app-build`.
+- macOS: 서명·공증 **자동화 스크립트는 준비됨**(`tool/release_notarize.sh`, 팀 HAGO L&F INC) — 단 Developer ID Application 인증서 미보유(Account Holder만 발급 가능, `tool/release_notarize.md` STEP 1 미완)로 **공증 보류**, 인증서 없으면 스크립트가 첫 검사에서 중단. 현재 실배포는 `tool/release_adhoc.sh`의 ad-hoc 서명 zip(`dist/Claudle-macOS-v*.zip`) — 수령자가 `xattr -dr com.apple.quarantine` 필요. 스크립트가 배포 게이트 3종(더티 트리·버전 재사용·덮어쓰기)을 강제하고 `v<버전>` annotated 태그를 기록으로 남긴다(`dist/`는 gitignore라 그 태그가 "이 zip이 어느 소스에서 나왔나"의 유일한 근거이자 롤백 경로 — `git checkout v<버전>`) — 상세는 `/app-build`.
 - Windows: **미서명**(SmartScreen 경고 알려진 상태), EV/OV 인증서 도입은 보류.
 - Windows CI: `.github/workflows/build-windows.yml`(수동 dispatch 또는 `v*` 태그 push).
 - 버전 동기화 함정: `pubspec.yaml` version ↔ `windows/installer/claudle.iss` AppVersion 수동 동기화 필요.
