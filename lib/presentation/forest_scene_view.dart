@@ -5,8 +5,10 @@ import 'package:flutter/scheduler.dart'; // material.dart 는 Ticker 를 export 
 
 import '../core/util/format.dart';
 import '../domain/models/agent_run.dart';
+import '../domain/models/context_gauge.dart';
 import 'agent_log_sheet.dart';
 import 'agent_widgets.dart';
+import 'context_gauge_bar.dart';
 import 'forest_scene.dart';
 
 //
@@ -26,7 +28,16 @@ const _plateBg = Color(0xB3101A14);
 /// 가시성 배선도 없다 — 엔진이 hidden·paused·detached 에서 프레임을 끊으므로 그게 곧 정지다.
 class ForestSceneView extends StatefulWidget {
   final List<AgentRun> runs;
-  const ForestSceneView({super.key, required this.runs});
+
+  /// 세션id → 컨텍스트 잔량. 라이브 판정은 [runs] 가 이미 했으므로 여기선 조회만 한다
+  /// (죽은 세션의 낡은 덤프는 그릴 캐릭터가 없어 자연히 걸러진다).
+  final Map<String, ContextGauge> gauges;
+
+  const ForestSceneView({
+    super.key,
+    required this.runs,
+    this.gauges = const {},
+  });
 
   @override
   State<ForestSceneView> createState() => _ForestSceneState();
@@ -133,6 +144,7 @@ class _ForestSceneState extends State<ForestSceneView>
             main: _scene.mainOf(_scene.clearings[i].sessionId),
             mainRun: _scene.mainRunOf(_scene.clearings[i].sessionId),
             title: _scene.titleOf(_scene.clearings[i].sessionId),
+            gauge: widget.gauges[_scene.clearings[i].sessionId],
             // 이름표 클릭 = 이 세션만 크게. 사람 클릭은 이미 상세 로그라 슬롯이 갈린다.
             // 열이 하나뿐이면 누를 이유가 없다(포커스 중엔 나가는 길이라 늘 살아 있다).
             onFocus: _scene.canFocus || _scene.focus != null
@@ -320,6 +332,9 @@ class _PersonStand extends StatelessWidget {
   /// 지금 포커스 모드인가 — 이름표가 "들어가기" 인지 "나가기" 인지 알려준다.
   final bool focused;
 
+  /// 이 세션의 컨텍스트 잔량. null = statusline 훅이 아직 이 세션을 안 그렸다.
+  final ContextGauge? gauge;
+
   const _PersonStand({
     required this.c,
     required this.clock,
@@ -329,6 +344,7 @@ class _PersonStand extends StatelessWidget {
     required this.title,
     required this.onFocus,
     required this.focused,
+    required this.gauge,
   });
 
   @override
@@ -373,6 +389,11 @@ class _PersonStand extends StatelessWidget {
                       focused: focused,
                     ),
                   ),
+                  // 컨텍스트 잔량 — 이름표와 한 줄이어야 한다(위 주석 참조).
+                  if (gauge != null) ...[
+                    const SizedBox(width: 4),
+                    ContextGaugeMiniBar(gauge: gauge!),
+                  ],
                 ],
               ),
             ),

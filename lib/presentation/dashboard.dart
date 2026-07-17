@@ -7,6 +7,7 @@ import '../core/db/usage_database.dart';
 import '../core/util/format.dart';
 import '../domain/models/subscription_limits.dart';
 import 'agents_screen.dart';
+import 'context_gauge_bar.dart';
 
 /// 상세 대시보드 창: 오늘/전체 요약 + 일별 막대 + 모델/프로젝트 순위.
 ///
@@ -48,9 +49,47 @@ class DashboardScreen extends StatelessWidget {
             builder: (_, lim, _) => _LimitsPanel(limits: lim),
           ),
           const SizedBox(height: 20),
+          // 게이지를 아직 안 켰을 때만 뜨는 온보딩(켜면 통째로 사라진다).
+          _ContextGaugeSection(controller: controller),
           // 보조: 기간별 토큰/비용 집계.
           _UsageBreakdown(controller: controller),
         ],
+      ),
+    );
+  }
+}
+
+/// 컨텍스트 게이지 온보딩 자리 — 게이지 자체는 숲(에이전트 화면)의 캐릭터마다 붙는다.
+/// 여기선 아직 안 켰을 때 왜 없는지 알리고 켜는 것만 한다(켜지면 사라진다).
+class _ContextGaugeSection extends StatelessWidget {
+  final AppController controller;
+  const _ContextGaugeSection({required this.controller});
+
+  @override
+  Widget build(BuildContext context) {
+    final c = controller.contextGaugeController;
+    return ValueListenableBuilder<String?>(
+      valueListenable: c.hint,
+      builder: (_, hint, _) => ValueListenableBuilder<bool>(
+        valueListenable: c.canEnable,
+        // 켜져 있으면 카드째로 사라져야 한다 — 껍데기만 남기면 빈 카드가 뜬다.
+        builder: (_, canEnable, _) => hint == null
+            ? const SizedBox.shrink()
+            : Column(
+                children: [
+                  Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(20),
+                      child: ContextGaugeBar(
+                        gauge: null,
+                        hint: hint,
+                        onEnable: canEnable ? c.enable : null,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                ],
+              ),
       ),
     );
   }

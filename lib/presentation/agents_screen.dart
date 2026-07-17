@@ -5,7 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../data/providers/claude_code/agent_run_reader.dart';
+import '../data/providers/claude_code/context_gauge_reader.dart';
 import '../domain/models/agent_run.dart';
+import '../domain/models/context_gauge.dart';
 import 'agent_history_view.dart';
 import 'forest_scene_view.dart';
 
@@ -52,6 +54,8 @@ class _AgentsScreenState extends State<AgentsScreen>
   static const _livePoll = Duration(seconds: 2);
 
   Size? _restoreSize;
+  // 세션id → 컨텍스트 잔량(라이브 폴링과 같이 갱신). statusline 훅이 없으면 늘 비어 있다.
+  Map<String, ContextGauge> _gauges = const {};
   List<AgentRun>? _runs; // 기록(전체). null = 아직 안 읽음(기록 탭 첫 진입 때 읽는다)
   List<RunGroup> _groups = const [];
   String? _error;
@@ -100,7 +104,12 @@ class _AgentsScreenState extends State<AgentsScreen>
     try {
       final runs = await Isolate.run(_readLiveRuns);
       if (!mounted) return;
-      setState(() => _liveRuns = runs);
+      // 게이지는 작은 JSON 몇 개라 아이솔레이트가 과하다(런 스캔과 달리 ms 단위).
+      final gauges = ContextGaugeReader().readAll();
+      setState(() {
+        _liveRuns = runs;
+        _gauges = gauges;
+      });
     } catch (_) {
       if (mounted && _liveRuns == null) setState(() => _liveRuns = const []);
     } finally {
@@ -244,6 +253,7 @@ class _AgentsScreenState extends State<AgentsScreen>
       if (_liveRuns == null) return _loading('실행 중인 에이전트 확인 중…');
       return _LiveView(
         runs: _liveRuns!.where((r) => r.isRunning).toList(),
+        gauges: _gauges,
         onShowHistory: () => _switchTab(false),
       );
     }
@@ -277,14 +287,19 @@ class _AgentsScreenState extends State<AgentsScreen>
 /// 뜬다. 빈 화면은 이제 **메인도 서브도 없을 때**뿐이다.
 class _LiveView extends StatelessWidget {
   final List<AgentRun> runs;
+  final Map<String, ContextGauge> gauges;
   final VoidCallback onShowHistory;
-  const _LiveView({required this.runs, required this.onShowHistory});
+  const _LiveView({
+    required this.runs,
+    required this.gauges,
+    required this.onShowHistory,
+  });
 
   @override
   Widget build(BuildContext context) {
     if (runs.isEmpty) return _empty(context);
     // key 금지 — 붙이면 2초 폴링마다 숲이 통째로 리셋된다.
-    return ForestSceneView(runs: runs);
+    return ForestSceneView(runs: runs, gauges: gauges);
   }
 
   Widget _empty(BuildContext context) => Center(

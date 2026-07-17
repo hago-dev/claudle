@@ -13,9 +13,13 @@ import '../data/ingest/ingest_service.dart';
 import '../data/limits/real_limits_source.dart';
 import '../data/providers/claude_code/claude_code_provider.dart';
 import '../data/providers/claude_code/claude_path_resolver.dart';
+import '../data/providers/claude_code/context_gauge_reader.dart';
 import '../data/providers/stub/stub_provider.dart';
+import '../data/statusline/statusline_installer.dart';
+import '../domain/models/context_gauge.dart';
 import '../domain/models/subscription_limits.dart';
 import '../domain/provider/usage_provider.dart';
+import 'context_gauge_controller.dart';
 import 'limits_controller.dart';
 
 /// 앱 상태 라벨(메뉴바 툴팁/대시보드용).
@@ -40,6 +44,14 @@ class AppController {
     interval: const Duration(seconds: 60),
   );
 
+  // 컨텍스트 게이지: statusline 이 덤프한 페이로드 폴링(로컬 파일 1개).
+  // 훅 배선도 이 컨트롤러가 맡는다 — 사용자가 settings.json 을 손댈 일이 없게.
+  late final ContextGaugeController contextGaugeController =
+      ContextGaugeController(
+    ContextGaugeReader(resolver: resolver),
+    StatuslineInstaller(resolver: resolver),
+  );
+
   final ValueNotifier<UsageTotals?> totalsAll = ValueNotifier(null);
   final ValueNotifier<UsageTotals?> totalsToday = ValueNotifier(null);
   final ValueNotifier<AppPhase> phase = ValueNotifier(AppPhase.starting);
@@ -51,6 +63,8 @@ class AppController {
   void bumpRevision() => revision.value++;
 
   ValueNotifier<SubscriptionLimits?> get limits => limitsController.limits;
+  ValueNotifier<Map<String, ContextGauge>> get contextGauges =>
+      contextGaugeController.gauges;
 
   final _subs = <StreamSubscription<void>>[];
   bool _started = false;
@@ -84,6 +98,7 @@ class AppController {
 
       // 구독 한도 폴링 시작(토큰 집계와 독립 — 헤드라인).
       unawaited(limitsController.start());
+      contextGaugeController.start();
 
       phase.value = AppPhase.scanning;
       status.value = '로그 분석 중…';
@@ -121,6 +136,7 @@ class AppController {
 
   void dispose() {
     limitsController.dispose();
+    contextGaugeController.dispose();
     for (final s in _subs) {
       s.cancel();
     }
