@@ -60,8 +60,8 @@ class _AgentLogSheetState extends State<AgentLogSheet> {
   /// 파일 하나만 다시 읽으므로(실측 수십 ms) 이 간격이면 싸다.
   static const _poll = Duration(seconds: 2);
 
-  /// 바닥에서 이 안쪽이면 "따라가는 중" 으로 본다 — 새 줄이 붙으면 같이 내려간다.
-  /// 위로 올려 읽는 중이면 건드리지 않는다(읽던 자리가 튀는 게 제일 짜증난다).
+  /// 새 내용이 붙는 가장자리에서 이 안쪽이면 "따라가는 중" 으로 본다.
+  /// 거기서 벗어나 읽고 있으면 건드리지 않는다(읽던 자리가 튀는 게 제일 짜증난다).
   static const _followSlack = 40.0;
 
   List<AgentStep>? _steps; // null = 첫 읽기 전(로딩)
@@ -89,12 +89,12 @@ class _AgentLogSheetState extends State<AgentLogSheet> {
       // State 가 끌려가 스폰이 터진다(경로·플래그만 값으로 넘긴다).
       final steps = await _stepsInIsolate(widget.run.filePath, live: widget.live);
       if (!mounted) return; // 시트를 닫았다 — 죽은 State 에 setState 금지
-      final follow = _atBottom; // 갈아 끼우기 **전에** 본다(뒤에 보면 이미 늘어난 높이다)
+      final follow = _atFollowEdge; // 갈아 끼우기 **전에** 본다(뒤에 보면 이미 늘어난 높이다)
       setState(() {
         _steps = steps;
         _error = null;
       });
-      if (follow) _stickToBottom();
+      if (follow) _stickToEdge();
     } catch (e) {
       if (!mounted) return;
       if (_steps == null) setState(() => _error = e); // 첫 읽기 실패만 화면에
@@ -103,16 +103,34 @@ class _AgentLogSheetState extends State<AgentLogSheet> {
     }
   }
 
-  /// 지금 바닥을 보고 있나 — 아직 안 붙었거나(첫 프레임) 바닥 근처면 따라간다.
-  bool get _atBottom {
+  /// 새 내용이 붙는 쪽 — **두 경로의 정렬이 정반대다**(리더):
+  ///  - 서브([readSteps], 정순): 새 도구가 맨 **아래** → 바닥을 따라간다.
+  ///  - 메인([readMainSteps], `activity.reversed`): 새 활동이 맨 **위** → 머리를 따라간다.
+  ///    메인 세션 파일은 수천 줄이라 "지금 하는 일" 을 맨 위에 올리려고 일부러 뒤집은 것이다.
+  ///
+  /// 한쪽만 보고 짜면 다른 쪽에서 **새 내용에서 멀어지는 방향**으로 밀어 버린다(실제로 그랬다).
+  bool get _followsHead => widget.live;
+
+  /// 지금 그 가장자리를 보고 있나 — 아직 안 붙었으면(첫 프레임) 따라가는 것으로 친다.
+  bool get _atFollowEdge {
     if (!_scroll.hasClients) return true;
     final p = _scroll.position;
-    return p.maxScrollExtent - p.pixels <= _followSlack;
+    return _followsHead
+        ? p.pixels <= _followSlack
+        : p.maxScrollExtent - p.pixels <= _followSlack;
   }
 
-  /// 새 줄이 붙은 만큼 바닥으로. 레이아웃이 끝나야 maxScrollExtent 가 새 높이라
-  /// 다음 프레임에 민다(지금 밀면 늘기 전 바닥이다).
-  void _stickToBottom() {
+  /// 새 줄이 붙은 만큼 그 가장자리로. 레이아웃이 끝나야 maxScrollExtent 가 새 높이라
+  /// 다음 프레임에 민다(지금 밀면 늘기 전 값이다).
+  void _stickToEdge() {
+    if (_followsHead) {
+      // 머리는 늘 0 이라 지금 밀어도 되지만, 목록이 갈리는 프레임과 겹치지 않게 맞춰 둔다.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !_scroll.hasClients) return;
+        _scroll.jumpTo(0);
+      });
+      return;
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !_scroll.hasClients) return;
       _scroll.jumpTo(_scroll.position.maxScrollExtent);

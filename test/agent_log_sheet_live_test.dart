@@ -43,6 +43,26 @@ void main() {
         },
       });
 
+  /// 메인 세션 줄 — 서브와 달리 `isSidechain`·`agentId` 가 없다(실측).
+  String mainAssistantLine(String toolName) => json.encode({
+        'type': 'assistant',
+        'timestamp': '2026-07-17T09:00:05.000Z',
+        'sessionId': 'main-1',
+        'message': {
+          'role': 'assistant',
+          'content': [
+            {
+              'type': 'tool_use',
+              'name': toolName,
+              'input': {'command': 'x'},
+            },
+          ],
+        },
+      });
+
+  String lastPromptLine(String prompt) =>
+      json.encode({'type': 'last-prompt', 'lastPrompt': prompt, 'sessionId': 'main-1'});
+
   AgentRun run({required bool isRunning}) => AgentRun(
         agentId: 'aaa',
         agentType: 'delegate',
@@ -59,7 +79,9 @@ void main() {
         isRunning: isRunning,
       );
 
-  Widget sheet(AgentRun r) => MaterialApp(home: Scaffold(body: AgentLogSheet(run: r)));
+  /// [live] = 메인 세션(사람 클릭) 경로 — 상세를 readMainSteps(최근순)로 읽는다.
+  Widget sheet(AgentRun r, {bool live = false}) =>
+      MaterialApp(home: Scaffold(body: AgentLogSheet(run: r, live: live)));
 
   setUp(() {
     tmp = Directory.systemTemp.createTempSync('agent_log_sheet_test');
@@ -101,6 +123,52 @@ void main() {
       await Future.delayed(const Duration(seconds: 3));
       await tester.pump();
       expect(find.text('Read'), findsNothing);
+    });
+  });
+
+  /// 지금 스크롤이 어디 있나 — ListView.controller 는 위젯의 공개 필드다.
+  ScrollController scrollOf(WidgetTester tester) =>
+      tester.widget<ListView>(find.byType(ListView)).controller!;
+
+  group('스크롤은 새 내용이 붙는 쪽을 향한다', () {
+    // 두 경로의 정렬이 정반대다(리더): 서브 readSteps 는 정순이라 새 도구가 **아래**,
+    // 메인 readMainSteps 는 activity.reversed 라 새 도구가 **위**(지금 하는 일을 맨 위에
+    // 보여주려는 의도). 따라가는 쪽도 그에 맞춰 갈려야 한다.
+
+    testWidgets('메인 세션(live): 새 내용이 위라 위를 본다', (tester) async {
+      // 한 화면을 넘겨야 스크롤이 생긴다.
+      file.writeAsStringSync([
+        lastPromptLine('지금 시킨 일'),
+        for (var i = 0; i < 40; i++) mainAssistantLine('Tool$i'),
+      ].join('\n'));
+
+      await tester.runAsync(() async {
+        await tester.pumpWidget(sheet(run(isRunning: true), live: true));
+        await Future.delayed(const Duration(milliseconds: 800));
+        await tester.pump();
+
+        final s = scrollOf(tester);
+        expect(s.position.maxScrollExtent, greaterThan(0), reason: '스크롤이 생길 만큼 길어야 한다');
+        expect(s.offset, 0, reason: '메인은 최근순 — 새 활동이 맨 위다. 바닥으로 밀면 정반대다');
+      });
+    });
+
+    testWidgets('서브에이전트: 새 내용이 아래라 아래를 본다', (tester) async {
+      file.writeAsStringSync([
+        userLine('지시'),
+        for (var i = 0; i < 40; i++) assistantLine('Tool$i', 'x'),
+      ].join('\n'));
+
+      await tester.runAsync(() async {
+        await tester.pumpWidget(sheet(run(isRunning: true)));
+        await Future.delayed(const Duration(milliseconds: 800));
+        await tester.pump();
+
+        final s = scrollOf(tester);
+        expect(s.position.maxScrollExtent, greaterThan(0));
+        expect(s.offset, s.position.maxScrollExtent,
+            reason: '서브는 정순 — 새 도구가 맨 아래다');
+      });
     });
   });
 
