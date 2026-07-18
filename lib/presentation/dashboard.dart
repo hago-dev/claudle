@@ -8,6 +8,7 @@ import '../core/util/format.dart';
 import '../domain/models/subscription_limits.dart';
 import 'agents_screen.dart';
 import 'context_gauge_bar.dart';
+import 'limits_panel.dart';
 
 /// 상세 대시보드 창: 오늘/전체 요약 + 일별 막대 + 모델/프로젝트 순위.
 ///
@@ -25,9 +26,9 @@ class DashboardScreen extends StatelessWidget {
           IconButton(
             icon: const Icon(Icons.pets, size: 18),
             tooltip: '에이전트들 보기',
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const AgentsScreen()),
-            ),
+            onPressed: () => Navigator.of(
+              context,
+            ).push(MaterialPageRoute(builder: (_) => const AgentsScreen())),
           ),
           ValueListenableBuilder<String>(
             valueListenable: controller.status,
@@ -44,10 +45,7 @@ class DashboardScreen extends StatelessWidget {
         padding: const EdgeInsets.all(20),
         children: [
           // ⭐ 헤드라인: 구독 사용량 한도(스샷 패널 재현).
-          ValueListenableBuilder<SubscriptionLimits?>(
-            valueListenable: controller.limits,
-            builder: (_, lim, _) => _LimitsPanel(limits: lim),
-          ),
+          _LimitsPanelBinding(controller: controller),
           const SizedBox(height: 20),
           // 게이지를 아직 안 켰을 때만 뜨는 온보딩(켜면 통째로 사라진다).
           _ContextGaugeSection(controller: controller),
@@ -97,7 +95,7 @@ class _ContextGaugeSection extends StatelessWidget {
 
 /// Windows 전용 항상-위 미니 패널: 우측 상단에 늘 떠서 세션%·리셋·주간 한도를 보여준다.
 /// (Windows 트레이 아이콘은 오버플로에 숨을 수 있어 화면에 상시 표시가 더 확실하다.
-///  macOS 는 메뉴바를 쓰므로 이 화면을 사용하지 않는다.) 헤드라인 [_LimitsPanel] 재사용.
+///  macOS 는 메뉴바를 쓰므로 이 화면을 사용하지 않는다.) 헤드라인 [LimitsPanel] 재사용.
 class WindowsHudScreen extends StatelessWidget {
   final AppController controller;
   const WindowsHudScreen({super.key, required this.controller});
@@ -116,16 +114,19 @@ class WindowsHudScreen extends StatelessWidget {
               color: Theme.of(context).colorScheme.surfaceContainerHighest,
               child: Row(
                 children: [
-                  const Text('Claudle 🐩',
-                      style:
-                          TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                  const Text(
+                    'Claudle 🐩',
+                    style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                  ),
                   const Spacer(),
                   IconButton(
                     icon: const Icon(Icons.pets, size: 16),
                     tooltip: '에이전트들 보기',
                     padding: EdgeInsets.zero,
-                    constraints:
-                        const BoxConstraints.tightFor(width: 30, height: 30),
+                    constraints: const BoxConstraints.tightFor(
+                      width: 30,
+                      height: 30,
+                    ),
                     onPressed: () => Navigator.of(context).push(
                       MaterialPageRoute(builder: (_) => const AgentsScreen()),
                     ),
@@ -134,8 +135,10 @@ class WindowsHudScreen extends StatelessWidget {
                     icon: const Icon(Icons.remove, size: 16),
                     tooltip: '트레이로 숨기기',
                     padding: EdgeInsets.zero,
-                    constraints:
-                        const BoxConstraints.tightFor(width: 30, height: 30),
+                    constraints: const BoxConstraints.tightFor(
+                      width: 30,
+                      height: 30,
+                    ),
                     onPressed: () => windowManager.hide(),
                   ),
                 ],
@@ -145,10 +148,7 @@ class WindowsHudScreen extends StatelessWidget {
           Expanded(
             child: SingleChildScrollView(
               padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
-              child: ValueListenableBuilder<SubscriptionLimits?>(
-                valueListenable: controller.limits,
-                builder: (_, lim, _) => _LimitsPanel(limits: lim),
-              ),
+              child: _LimitsPanelBinding(controller: controller),
             ),
           ),
         ],
@@ -226,9 +226,9 @@ class _UsageBreakdownState extends State<_UsageBreakdown> {
       context: context,
       firstDate: DateTime(2024),
       lastDate: now,
-      initialDateRange: _range ??
-          DateTimeRange(
-              start: now.subtract(const Duration(days: 7)), end: now),
+      initialDateRange:
+          _range ??
+          DateTimeRange(start: now.subtract(const Duration(days: 7)), end: now),
     );
     // 취소하면 기존 선택 유지.
     if (picked != null) {
@@ -243,8 +243,7 @@ class _UsageBreakdownState extends State<_UsageBreakdown> {
   Widget build(BuildContext context) {
     final controller = widget.controller;
     return AnimatedBuilder(
-      animation:
-          Listenable.merge([controller.totalsAll, controller.revision]),
+      animation: Listenable.merge([controller.totalsAll, controller.revision]),
       builder: (context, _) {
         final all = controller.totalsAll.value;
         if (all == null) {
@@ -272,9 +271,12 @@ class _UsageBreakdownState extends State<_UsageBreakdown> {
             Row(
               children: [
                 Expanded(
-                    child: _TotalsCard(title: _label, totals: periodTotals)),
+                  child: _TotalsCard(title: _label, totals: periodTotals),
+                ),
                 const SizedBox(width: 12),
-                Expanded(child: _TotalsCard(title: '전체', totals: all)),
+                Expanded(
+                  child: _TotalsCard(title: '전체', totals: all),
+                ),
               ],
             ),
             const SizedBox(height: 20),
@@ -316,10 +318,13 @@ class _UsageBreakdownState extends State<_UsageBreakdown> {
           ),
           actions: [
             TextButton(
-                onPressed: () => Navigator.pop(ctx), child: const Text('취소')),
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('취소'),
+            ),
             FilledButton(
-                onPressed: () => Navigator.pop(ctx, ctrl.text),
-                child: const Text('저장')),
+              onPressed: () => Navigator.pop(ctx, ctrl.text),
+              child: const Text('저장'),
+            ),
           ],
         ),
       );
@@ -359,8 +364,9 @@ class _PeriodSelector extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final shape =
-        RoundedRectangleBorder(borderRadius: BorderRadius.circular(8));
+    final shape = RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(8),
+    );
     final btnStyle = ButtonStyle(
       visualDensity: VisualDensity.compact,
       textStyle: const WidgetStatePropertyAll(TextStyle(fontSize: 12)),
@@ -402,128 +408,20 @@ class _PeriodSelector extends StatelessWidget {
   }
 }
 
-/// 구독 사용량 한도 패널 — Claude Code `/usage` 화면 재현.
-class _LimitsPanel extends StatelessWidget {
-  final SubscriptionLimits? limits;
-  const _LimitsPanel({required this.limits});
+/// 한도 패널 배선 — limits(값)와 status(실패 사유)를 함께 [LimitsPanel] 로 흘린다.
+/// 대시보드와 HUD 가 같이 쓴다.
+class _LimitsPanelBinding extends StatelessWidget {
+  final AppController controller;
+  const _LimitsPanelBinding({required this.controller});
 
   @override
   Widget build(BuildContext context) {
-    final lim = limits;
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.baseline,
-              textBaseline: TextBaseline.alphabetic,
-              children: [
-                Text('플랜 사용량 한도',
-                    style: Theme.of(context).textTheme.titleMedium),
-                const SizedBox(width: 10),
-                Text(lim?.planLabel ?? '—',
-                    style: Theme.of(context)
-                        .textTheme
-                        .titleMedium
-                        ?.copyWith(color: Colors.white70)),
-              ],
-            ),
-            const SizedBox(height: 16),
-            if (lim == null)
-              const Text('한도 조회 중…')
-            else ...[
-              _LimitRow(
-                bucket: lim.session,
-                subtitle: _sessionSubtitle(lim.session),
-              ),
-              const SizedBox(height: 18),
-              Text('주간 한도',
-                  style: Theme.of(context).textTheme.titleSmall),
-              const SizedBox(height: 10),
-              for (final b in lim.weekly) ...[
-                _LimitRow(bucket: b, subtitle: _weeklySubtitle(b)),
-                const SizedBox(height: 12),
-              ],
-              const SizedBox(height: 4),
-              Text('마지막 업데이트: ${_ago(lim.fetchedAt)}',
-                  style: Theme.of(context)
-                      .textTheme
-                      .bodySmall
-                      ?.copyWith(color: Colors.white38)),
-            ],
-          ],
-        ),
+    return ValueListenableBuilder<SubscriptionLimits?>(
+      valueListenable: controller.limits,
+      builder: (_, lim, _) => ValueListenableBuilder<String>(
+        valueListenable: controller.limitsController.status,
+        builder: (_, status, _) => LimitsPanel(limits: lim, status: status),
       ),
-    );
-  }
-
-  static String _sessionSubtitle(LimitBucket b) {
-    if (b.resetsAt == null) return '';
-    final left = compactDuration(b.resetsAt!.difference(DateTime.now()));
-    return '$left 후 재설정';
-  }
-
-  static String _weeklySubtitle(LimitBucket b) =>
-      b.resetsAt == null ? '' : '${resetClockKo(b.resetsAt!.toLocal())}에 재설정';
-
-  static String _ago(DateTime t) {
-    final d = DateTime.now().difference(t);
-    if (d.inSeconds < 60) return '방금';
-    if (d.inMinutes < 60) return '${d.inMinutes}분 전';
-    return '${d.inHours}시간 전';
-  }
-}
-
-/// 한도 한 줄: 라벨 + 부제(재설정) + 진행바 + % 사용됨.
-class _LimitRow extends StatelessWidget {
-  final LimitBucket bucket;
-  final String subtitle;
-  const _LimitRow({required this.bucket, required this.subtitle});
-
-  @override
-  Widget build(BuildContext context) {
-    final pct = bucket.usedFraction.clamp(0.0, 1.0);
-    final warn = pct >= 0.8;
-    final barColor =
-        warn ? Colors.orangeAccent : Theme.of(context).colorScheme.primary;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(bucket.label,
-                      style: const TextStyle(fontWeight: FontWeight.w600)),
-                  if (subtitle.isNotEmpty)
-                    Text(subtitle,
-                        style: Theme.of(context)
-                            .textTheme
-                            .bodySmall
-                            ?.copyWith(color: Colors.white54)),
-                ],
-              ),
-            ),
-            Text('${bucket.usedPercent}% 사용됨',
-                style: const TextStyle(
-                    fontFeatures: [FontFeature.tabularFigures()])),
-          ],
-        ),
-        const SizedBox(height: 8),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(3),
-          child: LinearProgressIndicator(
-            value: pct,
-            minHeight: 8,
-            backgroundColor: Colors.white12,
-            valueColor: AlwaysStoppedAnimation(barColor),
-          ),
-        ),
-      ],
     );
   }
 }
@@ -570,15 +468,18 @@ class _TotalsCard extends StatelessWidget {
             if (t == null)
               const Text('—')
             else ...[
-              Text(compactTokens(t.totalTokens),
-                  style: Theme.of(context).textTheme.headlineSmall),
+              Text(
+                compactTokens(t.totalTokens),
+                style: Theme.of(context).textTheme.headlineSmall,
+              ),
               Text('tokens', style: Theme.of(context).textTheme.bodySmall),
               const SizedBox(height: 6),
-              Text(money(t.costUsd),
-                  style: Theme.of(context)
-                      .textTheme
-                      .titleLarge
-                      ?.copyWith(color: Colors.greenAccent)),
+              Text(
+                money(t.costUsd),
+                style: Theme.of(
+                  context,
+                ).textTheme.titleLarge?.copyWith(color: Colors.greenAccent),
+              ),
             ],
           ],
         ),
@@ -595,8 +496,9 @@ class _DailyBars extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (data.isEmpty) return const Center(child: Text('데이터 없음'));
-    final maxCost =
-        data.map((d) => d.cost).fold<double>(0, (a, b) => b > a ? b : a);
+    final maxCost = data
+        .map((d) => d.cost)
+        .fold<double>(0, (a, b) => b > a ? b : a);
     return BarChart(
       BarChartData(
         alignment: BarChartAlignment.spaceAround,
@@ -610,12 +512,15 @@ class _DailyBars extends StatelessWidget {
           ),
         ),
         titlesData: FlTitlesData(
-          leftTitles:
-              const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-          rightTitles:
-              const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-          topTitles:
-              const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          leftTitles: const AxisTitles(
+            sideTitles: SideTitles(showTitles: false),
+          ),
+          rightTitles: const AxisTitles(
+            sideTitles: SideTitles(showTitles: false),
+          ),
+          topTitles: const AxisTitles(
+            sideTitles: SideTitles(showTitles: false),
+          ),
           bottomTitles: AxisTitles(
             sideTitles: SideTitles(
               showTitles: true,
@@ -627,8 +532,10 @@ class _DailyBars extends StatelessWidget {
                 if (i % 2 != 0) return const SizedBox();
                 return Padding(
                   padding: const EdgeInsets.only(top: 4),
-                  child: Text(data[i].day.substring(8),
-                      style: const TextStyle(fontSize: 10)),
+                  child: Text(
+                    data[i].day.substring(8),
+                    style: const TextStyle(fontSize: 10),
+                  ),
                 );
               },
             ),
@@ -653,7 +560,8 @@ class _DailyBars extends StatelessWidget {
                     ],
                   ),
                   borderRadius: const BorderRadius.vertical(
-                      top: Radius.circular(2)),
+                    top: Radius.circular(2),
+                  ),
                 ),
               ],
             ),
@@ -673,14 +581,21 @@ class _RankedBars extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (rows.isEmpty) return const Text('데이터 없음');
-    final maxCost =
-        rows.map((r) => r.cost).fold<double>(0, (a, b) => b > a ? b : a);
+    final maxCost = rows
+        .map((r) => r.cost)
+        .fold<double>(0, (a, b) => b > a ? b : a);
     final scheme = Theme.of(context).colorScheme;
-    return Column(children: [for (final r in rows) _row(context, r, maxCost, scheme)]);
+    return Column(
+      children: [for (final r in rows) _row(context, r, maxCost, scheme)],
+    );
   }
 
   Widget _row(
-      BuildContext context, GroupRow r, double maxCost, ColorScheme scheme) {
+    BuildContext context,
+    GroupRow r,
+    double maxCost,
+    ColorScheme scheme,
+  ) {
     final content = Padding(
       padding: const EdgeInsets.symmetric(vertical: 5, horizontal: 4),
       child: Row(
@@ -690,15 +605,19 @@ class _RankedBars extends StatelessWidget {
             child: Row(
               children: [
                 Flexible(
-                  child: Text(r.label,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 12)),
+                  child: Text(
+                    r.label,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 12),
+                  ),
                 ),
                 if (onRename != null) ...[
                   const SizedBox(width: 3),
-                  Icon(Icons.edit,
-                      size: 11,
-                      color: scheme.onSurface.withValues(alpha: 0.3)),
+                  Icon(
+                    Icons.edit,
+                    size: 11,
+                    color: scheme.onSurface.withValues(alpha: 0.3),
+                  ),
                 ],
               ],
             ),
@@ -719,7 +638,8 @@ class _RankedBars extends StatelessWidget {
                     height: 16,
                     decoration: BoxDecoration(
                       gradient: LinearGradient(
-                          colors: [scheme.primary, scheme.tertiary]),
+                        colors: [scheme.primary, scheme.tertiary],
+                      ),
                       borderRadius: BorderRadius.circular(4),
                     ),
                   ),
@@ -730,18 +650,22 @@ class _RankedBars extends StatelessWidget {
           const SizedBox(width: 8),
           SizedBox(
             width: 64,
-            child: Text(money(r.cost),
-                textAlign: TextAlign.right,
-                style: const TextStyle(
-                    fontSize: 12, fontWeight: FontWeight.w600)),
+            child: Text(
+              money(r.cost),
+              textAlign: TextAlign.right,
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+            ),
           ),
           SizedBox(
             width: 56,
-            child: Text(compactTokens(r.tokens),
-                textAlign: TextAlign.right,
-                style: TextStyle(
-                    fontSize: 11,
-                    color: scheme.onSurface.withValues(alpha: 0.5))),
+            child: Text(
+              compactTokens(r.tokens),
+              textAlign: TextAlign.right,
+              style: TextStyle(
+                fontSize: 11,
+                color: scheme.onSurface.withValues(alpha: 0.5),
+              ),
+            ),
           ),
         ],
       ),

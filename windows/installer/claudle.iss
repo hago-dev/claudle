@@ -11,7 +11,7 @@
 ; ⚠️ pubspec.yaml 의 version 과 손으로 맞춰야 한다 — Inno 는 pubspec 을 읽지 않는다.
 ; (exe 내부 버전은 Runner.rc 가 FLUTTER_VERSION_* 로 자동 동기 → 여기만 밀리면
 ;  "설치파일명·제어판은 구버전, exe 는 신버전" 인 물건이 나온다. 실제로 1.0.0 로 밀려 있었다.)
-#define AppVersion "1.5.0"
+#define AppVersion "1.5.1"
 #define AppPublisher "kr.hago"
 #define BuildDir "..\..\build\windows\x64\runner\Release"
 
